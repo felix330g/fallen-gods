@@ -40,6 +40,7 @@ const RECENT_BY_MEMORY = {
   },
   first_chain: '「那次和{partner}的配合？」{name}難得地笑了。「沒有說好，就是知道。」',
   guard_save: '「那時候{other}差點就倒了。」{name}沉默了一會兒。「下次不會讓事情走到那一步。」',
+  brink: '「那時候只剩一口氣。」{name}低頭看著自己的手。「現在還能站在這裡，已經算賺到。」',
   rival_defeated: '「殘響騎士。」{name}握緊手裡的東西。「他倒下前，好像想說什麼。」',
 };
 

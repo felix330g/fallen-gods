@@ -31,7 +31,7 @@ async function play(page, label) {
   await page.goto(base);
   await page.getByRole('button', { name: '新遊戲' }).click();
   check(await page.getByRole('button', { name: '出發遠征' }).isVisible(), `${label} 進入營地`);
-  check(await page.getByText(/v0\.4\.\d/).isVisible(), `${label} 顯示版本 v0.4`);
+  check(await page.getByText(/v0\.5\.\d/).isVisible(), `${label} 顯示版本 v0.5`);
   // 營火談話：受限選單，聊完當天鎖住
   await page.locator('button[data-act="talk"][data-arg="ade:past"]').click();
   check(await page.locator('#talkResult').isVisible(), `${label} 營火談話有回應`);

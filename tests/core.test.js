@@ -321,3 +321,24 @@ test('存檔相容：v0.3 存檔（沒有好感欄位）可以讀取並補上預
   assert.deepEqual(g2.affinity, {}); assert.deepEqual(g2.talked, {});
   G.talk(g2, { actor_id: 'rook', intent: 'past' });
 });
+
+test('死裡逃生記憶：只在結束時仍站著且 HP ≤ 20% 時寫入，引用真實傷害事件，營火談話會引用', () => {
+  const rec = runAuto(mk(43, { enemies: ['goblin', 'slime', 'goblin'] }));
+  const mems = deriveMemories(rec, { careerKills: {}, existingKeys: new Set(), day: 1 }).filter((m) => m.type === 'brink');
+  assert.ok(mems.length >= 1);
+  assert.deepEqual(verifyMemories(mems, rec), []);
+  const last = rec.turns.at(-1).end_snapshot.actors;
+  for (const m of mems) {
+    const a = last[m.actors[0]], c = rec.combatants.find((x) => x.actor_id === m.actors[0]);
+    assert.ok(a.alive && a.hp * 100 <= c.hp_max * 20, '結束時仍站著且 ≤20% HP');
+    assert.match(m.text, new RegExp(`僅剩 ${a.hp} 點`), '數字等於結束快照');
+  }
+  const again = deriveMemories(rec, { careerKills: {}, existingKeys: new Set(mems.map((m) => m.key)), day: 1 });
+  assert.equal(again.filter((m) => m.type === 'brink').length, 0, '去重');
+  const g = G.newGame(3);
+  g.memories = [{ ...mems[0], key: mems[0].key }];
+  const id = mems[0].actors[0];
+  const line = G.talk(g, { actor_id: id, intent: 'recent' });
+  assert.match(line.text, /只剩一口氣/);
+  assert.deepEqual(line.refs, [mems[0].key]);
+});

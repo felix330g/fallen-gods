@@ -55,6 +55,13 @@ export function deriveMemories(rec, ctx) {
       }
     }
   }
+  // 死裡逃生：戰鬥結束仍站著、且 HP ≤ 20% 最大值（由結束快照判定，引用最後一次降低其 HP 的傷害事件）
+  for (const c of party) {
+    const a = last[c.actor_id];
+    if (!a?.alive || a.hp * 100 > c.hp_max * 20) continue;
+    const hit = [...evs].reverse().find((e) => e.event_type === 'damage_applied' && e.target_ids[0] === c.actor_id);
+    if (hit) add(`brink:${c.actor_id}`, 'brink', [c.actor_id], [hit.event_id], `${c.name} 帶著僅剩 ${a.hp} 點 HP 撐過了一場戰鬥。`);
+  }
   return out;
 }
 
