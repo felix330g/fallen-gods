@@ -43,7 +43,9 @@ async function play(page, label) {
     if (t.includes('出發遠征')) break;
     if (await page.getByRole('button', { name: /^執行第|^下一回合/ }).count()) {
       if (battles === 0 && label === 'desktop') await page.getByRole('button', { name: /^執行第|^下一回合/ }).click();
-      await page.getByRole('button', { name: /自動打完|剩下交給戰術/ }).click();
+      // 單步後戰鬥可能已結束（種子隨機），此時沒有自動按鈕，回到迴圈判斷
+      const auto = page.getByRole('button', { name: /自動打完|剩下交給戰術/ });
+      if (await auto.count()) await auto.click();
       continue;
     }
     if (await page.getByRole('button', { name: '查看戰報' }).count()) {
