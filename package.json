@@ -1,0 +1,18 @@
+{
+  "name": "fallen-gods",
+  "version": "0.4.0",
+  "private": true,
+  "description": "眾神殞落：AI 文字冒險 RPG 垂直切片（灰燼地窖）",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.js",
+    "build": "node scripts/build.mjs",
+    "e2e": "node e2e/smoke.mjs",
+    "e2e:dist": "node e2e/smoke.mjs --dist",
+    "balance": "node scripts/balance.mjs 300",
+    "serve": "python3 -m http.server 8080"
+  },
+  "devDependencies": {
+    "playwright": "1.56.0"
+  }
+}
