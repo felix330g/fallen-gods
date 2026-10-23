@@ -109,6 +109,8 @@ export function simpleLog(rec, discoveries = {}) {
         cur.parts.push(`${nameOf(rec, e.target_ids[0])} +${e.calculation.effective}`);
       } else if (cur && e.event_type === 'shield_applied') {
         cur.parts.push(`${nameOf(rec, e.target_ids[0])} 護盾 +${e.calculation.amount}`);
+      } else if (cur && e.event_type === 'status_removed') {
+        cur.parts.push(`${nameOf(rec, e.target_ids[0])} 的${STATUSES[e.after.status_id].name}被淨化`);
       } else if (cur && e.event_type === 'status_applied' && e.after.status_id !== 'guarding') {
         cur.parts.push(`${nameOf(rec, e.target_ids[0])} ${STATUSES[e.after.status_id].name}`);
       } else if (e.event_type === 'actor_defeated') {
@@ -124,7 +126,7 @@ export function simpleLog(rec, discoveries = {}) {
 
 const TYPE_ZH = { turn_start: '回合開始', turn_end: '回合結束', action_declared: '宣告行動', action_invalid: '指令無效', cooldown_changed: '進入冷卻',
   hit_check: '命中判定', critical_check: '暴擊判定', damage_applied: '傷害', heal_applied: '治療', shield_applied: '護盾', status_applied: '狀態附加',
-  status_expired: '狀態結束', actor_defeated: '倒下', battle_ended: '戰鬥結束', synergy_trigger_check: '羈絆判定', phase_changed: '階段轉換' };
+  status_expired: '狀態結束', status_removed: '淨化', actor_defeated: '倒下', battle_ended: '戰鬥結束', synergy_trigger_check: '羈絆判定', phase_changed: '階段轉換' };
 
 /** 詳細戰報：每個事件一行，含判定與計算 */
 export function detailedLog(rec, discoveries = {}) {
@@ -150,6 +152,7 @@ export function detailedLog(rec, discoveries = {}) {
       case 'heal_applied': d = `${tgt} 治療 ${c.amount}，有效 ${c.effective}，溢補 ${c.overheal}；HP ${e.before.hp}→${e.after.hp}`; break;
       case 'shield_applied': d = `${tgt} 護盾 ${e.before.shield}→${e.after.shield}`; break;
       case 'status_applied': d = `${tgt} ${STATUSES[e.after.status_id].name}（${e.after.stacks} 層，${e.after.remaining_turns} 回合）`; break;
+      case 'status_removed': d = `${tgt} 的 ${STATUSES[e.after.status_id].name}（${e.before.stacks} 層，剩 ${e.before.remaining_turns} 回合）被淨化（來源 ${e.source_event_id.split(':').pop()}）`; break;
       case 'status_expired': d = `${tgt} 的 ${STATUSES[e.after.status_id].name} 結束`; break;
       case 'actor_defeated': d = `${nameOf(rec, e.actor_id)} 倒下（來源 ${e.source_event_id.split(':').pop()}）`; break;
       case 'synergy_trigger_check': d = `${nameOf(rec, e.actor_id)}×${nameOf(rec, e.flags.partner_id)} 連攜 Lv${c.level}：機率 ${c.chance}% 擲 ${c.roll} → ${c.success ? '發動' : '未發動'}`; break;

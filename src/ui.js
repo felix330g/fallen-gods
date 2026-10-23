@@ -1,5 +1,5 @@
 // 介面層：只讀寫 game.js 的 API，不直接改數值。
-import { CHARACTERS, SKILLS, STATUSES, ITEMS, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION } from './data.js';
+import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef } from './data.js';
 import { stepRound, chooseAction, currentSkills, pairKey, pairLevel } from './engine.js';
 import * as G from './game.js';
 import { summary, simpleLog, detailedLog, computeStats, hpCurve } from './report.js';
@@ -10,6 +10,7 @@ const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: 
 const root = () => document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TACTIC = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
+const RARITY_CLASS = { 普通: 'c', 精良: 'u', 稀有: 'r', 史詩: 'e' };
 const SERIES = ['var(--s1)', 'var(--s2)', 'var(--s3)', 'var(--s4)', 'var(--s5)', 'var(--bad)', 'var(--warn)'];
 
 function save() { try { localStorage.setItem(SAVE_KEY, G.serialize(ui.game)); } catch { /* 無法存檔時仍可遊玩 */ } }
@@ -44,9 +45,9 @@ function messages() {
   return (ui.err ? `<div class="notice err">${esc(ui.err)}</div>` : '') + (ui.msg ? `<div class="notice">${esc(ui.msg)}</div>` : '');
 }
 function itemText(id) {
-  const it = ITEMS[id];
+  const it = itemDef(id);
   const mods = Object.entries(it.mods).map(([k, v]) => `${{ atk: '攻', def: '防', hp: '命', spd: '速', crit: '暴' }[k]}+${v}`).join(' ');
-  return `${esc(it.name)} <span class="chip">${it.rarity}</span><span class="small muted">${mods}</span>`;
+  return `<span class="rar-${RARITY_CLASS[it.rarity]}">${esc(it.name)}</span> <span class="chip">${it.rarity}</span><span class="small muted">${mods}</span>`;
 }
 
 // ── 標題 ──────────────────────────────────────────
@@ -116,11 +117,12 @@ function tabGear() {
     const r = g.roster[c.id];
     return `<tr><td>${esc(c.name)}</td>${['weapon', 'armor'].map((s) => `<td style="text-align:left">${r.equip[s] ? `${itemText(r.equip[s])} <button class="link" data-act="unequip" data-arg="${c.id}:${s}">卸下</button>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`;
   }).join('');
-  const inv = g.inventory.length ? g.inventory.map((it, i) => `<div class="row" style="margin-bottom:6px">${itemText(it)}
-      <select data-change="equip" data-arg="${i}"><option value="">裝備給…</option>${Object.values(CHARACTERS).map((c) => `<option value="${c.id}">${c.name}</option>`).join('')}</select></div>`).join('')
+  const inv = g.inventory.length ? g.inventory.map((it, i) => `<div class="row invrow"><span class="invname">${itemText(it)}</span>
+      <select data-change="equip" data-arg="${i}"><option value="">裝備給…</option>${Object.values(CHARACTERS).map((c) => `<option value="${c.id}">${c.name}</option>`).join('')}</select>
+      ${ui.confirm === `salvage:${i}` ? `<span class="confirm"><b>分解換 ${SALVAGE_GOLD[itemDef(it).rarity]} 金幣？</b><button data-act="salvageYes" data-arg="${i}">分解</button><button data-act="cancelConfirm">取消</button></span>` : `<button class="small" data-act="salvage" data-arg="${i}">分解</button>`}</div>`).join('')
     : '<p class="muted">背包是空的。遠征中撿到的物品只有平安回來才會入袋。</p>';
   return `<div class="panel"><h2>裝備</h2><div class="tablewrap"><table><tr><th>角色</th><th style="text-align:left">武器</th><th style="text-align:left">防具</th></tr>${rows}</table></div></div>
-    <div class="panel"><h3>背包</h3>${inv}</div>`;
+    <div class="panel"><h3>背包</h3><p class="small muted">越深的樓層越容易掉落帶詞綴的裝備；每多一個詞綴，稀有度提升一級（普通→精良→稀有→史詩）。用不到的可以分解換金幣。</p>${inv}</div>`;
 }
 function tabResearch() {
   const g = ui.game;
@@ -252,7 +254,7 @@ function repSummary(rep, rec) {
   const rows = s.party.map((p) => `<tr><td>${esc(p.name)}</td><td>${p.damage}</td><td>${p.taken}</td><td>${p.healing}</td><td>${p.kills}</td></tr>`).join('');
   const rewards = [];
   if (rep.gold) rewards.push(`金幣 +${rep.gold}`);
-  for (const it of rep.loot) rewards.push(ITEMS[it].name);
+  for (const it of rep.loot) rewards.push(itemDef(it).name);
   for (const id of rep.levelUps) rewards.push(`${CHARACTERS[id].name} 升級`);
   for (const [k, v] of Object.entries(rep.pairGain)) if (v) rewards.push(`${k.split('|').map((x) => CHARACTERS[x].name).join('×')} 熟練度 +${v}`);
   const mems = rep.newMemories.map((k) => g().memories.find((m) => m.key === k)).filter(Boolean);
@@ -333,6 +335,8 @@ function act(name, arg) {
       if (game.party.length !== 3) { ui.err = '需要三名隊員才能出發。'; break; }
       G.startExpedition(game); save(); ui.view = 'map'; break;
     case 'buyPotion': G.buyPotion(game); save(); break;
+    case 'salvage': ui.confirm = `salvage:${arg}`; break;
+    case 'salvageYes': ui.msg = `分解完成，得到 ${G.salvage(game, +arg)} 金幣`; save(); break;
     case 'talk': { const [id, intent] = arg.split(':'); ui.talk = G.talk(game, { actor_id: id, intent }); save(); break; }
     case 'unequip': { const [id, slot] = arg.split(':'); G.unequip(game, id, slot); save(); break; }
     case 'experiment': ui.exp = G.runExperiment(game, arg); save(); break;
@@ -386,10 +390,21 @@ function change(name, arg, value) {
 
 function exportSave() {
   ui.exportText = G.serialize(ui.game);
+  const filename = `fallen-gods-day${ui.game.day}.json`;
+  // claude.ai 託管頁面：透過 downloads 能力存檔（檢視者會看到確認視窗）；其他環境用一般下載連結
+  if (window.claude?.use) {
+    const text = ui.exportText;
+    window.claude.use('downloads').then((dl) => {
+      if (!dl) { ui.msg = '這個檢視環境不能直接下載，請複製下方文字。'; render(); return; }
+      return dl.save({ filename, data: text }).then(() => { ui.msg = '存檔已下載'; render(); },
+        (e) => { if (e?.code !== 'declined') { ui.msg = '無法下載，請複製下方文字。'; render(); } });
+    }).catch(() => {});
+    return;
+  }
   const blob = new Blob([G.serialize(ui.game)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `fallen-gods-day${ui.game.day}.json`;
+  a.download = filename;
   try { a.click(); } catch { /* 沙盒環境可能擋下載，改用文字框 */ }
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }

@@ -1,5 +1,5 @@
 // 遊戲資料。所有角色與數值皆為「垂直切片測試用」，非正式設定。
-export const RULES_VERSION = '0.4.0';
+export const RULES_VERSION = '0.5.0';
 
 export const SKILLS = {
   arrow_shot: { id: 'arrow_shot', name: '射擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
@@ -8,7 +8,7 @@ export const SKILLS = {
   guard: { id: 'guard', name: '守護', kind: 'guard', target: 'ally', cd: 2, desc: '替一名隊友承受攻擊，持續到下回合結束，冷卻 2' },
   war_cry: { id: 'war_cry', name: '鼓舞', kind: 'shield', target: 'all_allies', power: 8, cd: 4, desc: '全隊獲得 8 點護盾，冷卻 4' },
   spark: { id: 'spark', name: '火花', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
-  mend: { id: 'mend', name: '治癒', kind: 'heal', target: 'ally', power: 16, mult: 60, cd: 2, desc: '恢復 16＋60% 攻擊的生命，冷卻 2' },
+  mend: { id: 'mend', name: '治癒', kind: 'heal', target: 'ally', power: 16, mult: 60, cd: 2, cleanse: 1, desc: '恢復 16＋60% 攻擊的生命，並淨化 1 個負面狀態（灼燒／流血／虛弱），冷卻 2' },
   ember_burst: { id: 'ember_burst', name: '燼爆', kind: 'attack', target: 'all_enemies', mult: 70, cd: 3, applies: { status_id: 'burn', turns: 2, power: 3 }, desc: '對全體敵人 70% 攻擊並灼燒 2 回合，冷卻 3' },
   slash: { id: 'slash', name: '斬擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
   rending_cut: { id: 'rending_cut', name: '裂傷斬', kind: 'attack', target: 'enemy', mult: 90, cd: 2, applies: { status_id: 'bleed', turns: 3, power: 4 }, desc: '90% 攻擊並流血 3 回合（可疊 3 層），冷卻 2' },
@@ -25,9 +25,9 @@ export const SKILLS = {
 };
 
 export const STATUSES = {
-  burn: { id: 'burn', name: '灼燒', dot: true, maxStacks: 1 },
-  bleed: { id: 'bleed', name: '流血', dot: true, maxStacks: 3 },
-  weaken: { id: 'weaken', name: '虛弱', atkPct: 70, maxStacks: 1 },
+  burn: { id: 'burn', name: '灼燒', dot: true, negative: true, maxStacks: 1 },
+  bleed: { id: 'bleed', name: '流血', dot: true, negative: true, maxStacks: 3 },
+  weaken: { id: 'weaken', name: '虛弱', atkPct: 70, negative: true, maxStacks: 1 },
   guarding: { id: 'guarding', name: '守護中', maxStacks: 1 },
   protected: { id: 'protected', name: '受守護', maxStacks: 1 },
 };
@@ -72,6 +72,35 @@ export const ITEMS = {
   ash_cloak: { id: 'ash_cloak', name: '灰燼斗篷', slot: 'armor', rarity: '稀有', mods: { def: 2, spd: 2, hp: 8 } },
   ember_mail: { id: 'ember_mail', name: '回燼胸甲', slot: 'armor', rarity: '稀有', mods: { def: 3, hp: 14 } },
 };
+
+// ── 詞綴與稀有度（P07）──────────────────────────────
+// 物品 ID 格式：base 或 base~affix1~affix2（字串，存檔相容；舊存檔的物品就是沒有詞綴的 base）
+export const RARITIES = ['普通', '精良', '稀有', '史詩'];
+export const AFFIXES = {
+  keen: { id: 'keen', name: '鋒利', slots: ['weapon'], mods: { atk: 1 } },
+  precise: { id: 'precise', name: '精準', slots: ['weapon'], mods: { crit: 4 } },
+  swift: { id: 'swift', name: '迅捷', slots: ['weapon', 'armor'], mods: { spd: 1 } },
+  sturdy: { id: 'sturdy', name: '堅固', slots: ['armor'], mods: { def: 1 } },
+  vital: { id: 'vital', name: '強韌', slots: ['armor'], mods: { hp: 8 } },
+};
+// 掉落詞綴機率（百分比），依樓層；餘燼回流時另外加成
+export const AFFIX_TABLE = { first: [20, 35, 50], second: [0, 10, 20], emberBonus: { first: 15, second: 10 } };
+export const SALVAGE_GOLD = { 普通: 5, 精良: 10, 稀有: 20, 史詩: 35 };
+
+/** 解析物品 ID → 完整定義（名稱、稀有度、合計屬性）。未知 ID 回傳 null。 */
+export function itemDef(id) {
+  if (typeof id !== 'string') return null;
+  const [baseId, ...affixIds] = id.split('~');
+  const base = ITEMS[baseId];
+  if (!base || affixIds.length > 2 || new Set(affixIds).size !== affixIds.length) return null;
+  const affixes = affixIds.map((a) => AFFIXES[a]);
+  if (affixes.some((a) => !a || !a.slots.includes(base.slot))) return null;
+  const mods = { ...base.mods };
+  for (const a of affixes) for (const [k, v] of Object.entries(a.mods)) mods[k] = (mods[k] || 0) + v;
+  const rarity = RARITIES[Math.min(RARITIES.length - 1, RARITIES.indexOf(base.rarity) + affixes.length)];
+  const name = affixes.length ? `${affixes.map((a) => a.name).join('・')}的${base.name}` : base.name;
+  return { id, base: baseId, slot: base.slot, name, rarity, mods, affixes: affixIds };
+}
 
 // 地城：每層 3 步，每步兩個選擇；第 3 層最後一步固定是 Boss
 // after_boss：擊敗殘響騎士後，世界改變 → 地窖進入「餘燼回流」，遭遇與掉落改變（P06 地城隨世界事件變化）
