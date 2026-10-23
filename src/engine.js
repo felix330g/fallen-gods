@@ -125,6 +125,20 @@ function applyStatus(state, turn, srcId, tgtId, app, sourceEv) {
     after: { status_id: app.status_id, stacks: (ex || a.statuses.at(-1)).stacks, remaining_turns: app.turns } });
 }
 
+// 淨化：依固定優先順序移除負面狀態（灼燒 → 流血 → 虛弱），寫成 status_removed 事件
+const CLEANSE_ORDER = ['burn', 'bleed', 'weaken'];
+function cleanse(state, turn, srcId, tgtId, count, sourceEv) {
+  const a = state.actors[tgtId];
+  for (let n = 0; n < count; n++) {
+    const s = CLEANSE_ORDER.map((sid) => a.statuses.find((x) => x.status_id === sid)).find(Boolean);
+    if (!s) return;
+    a.statuses = a.statuses.filter((x) => x !== s);
+    emit(state, turn, 'status_removed', { actor_id: srcId, target_ids: [tgtId], skill_id: sourceEv.skill_id, source_event_id: sourceEv.event_id,
+      before: { status_id: s.status_id, stacks: s.stacks, remaining_turns: s.remaining_turns }, after: { status_id: s.status_id } });
+  }
+}
+const hasNegative = (state, id) => state.actors[id].statuses.some((s) => STATUSES[s.status_id].negative);
+
 function resolveIntercept(state, turn, tgtId) {
   const prot = hasStatus(state, tgtId, 'protected');
   if (!prot) return { target: tgtId };
@@ -210,6 +224,10 @@ export function chooseAction(state, id) {
   if (heal) {
     const low = allies.filter((a) => hpPct(state, a.actor_id) < healTh).sort((a, b) => hpPct(state, a.actor_id) - hpPct(state, b.actor_id))[0];
     if (low) return { skill_id: heal.id, target_id: low.actor_id };
+    if (heal.cleanse && tactic !== 'aggressive') {
+      const dirty = allies.filter((a) => hasNegative(state, a.actor_id) && hpPct(state, a.actor_id) < 85).sort((a, b) => hpPct(state, a.actor_id) - hpPct(state, b.actor_id))[0];
+      if (dirty) return { skill_id: heal.id, target_id: dirty.actor_id };
+    }
   }
   const guard = skills.find((s) => s.kind === 'guard' && ready(state, id, s.id));
   if (guard && tactic !== 'aggressive') {
@@ -271,8 +289,9 @@ function execute(state, turn, id, act) {
     const eff = Math.min(amount, info(state, act.target_id).hp_max - t.hp);
     const before = { hp: t.hp };
     t.hp += eff;
-    emit(state, turn, 'heal_applied', { actor_id: id, target_ids: [act.target_id], skill_id: sk.id, before, after: { hp: t.hp },
+    const healEv = emit(state, turn, 'heal_applied', { actor_id: id, target_ids: [act.target_id], skill_id: sk.id, before, after: { hp: t.hp },
       calculation: { amount, effective: eff, overheal: amount - eff } });
+    if (sk.cleanse) cleanse(state, turn, id, act.target_id, sk.cleanse, healEv);
   } else if (sk.kind === 'guard') {
     applyStatus(state, turn, id, id, { status_id: 'guarding', turns: 2 }, { skill_id: sk.id });
     applyStatus(state, turn, id, act.target_id, { status_id: 'protected', turns: 2 }, { skill_id: sk.id });
@@ -355,7 +374,8 @@ export function runAuto(state) {
 export function verifyRecord(record) {
   const errors = [];
   let prev = null;
-  const ids = new Set(record.turns.flatMap((t) => t.events.map((e) => e.event_id)));
+  const byId = Object.fromEntries(record.turns.flatMap((t) => t.events.map((e) => [e.event_id, e])));
+  const ids = new Set(Object.keys(byId));
   for (const t of record.turns) {
     if (prev && JSON.stringify(prev) !== JSON.stringify(t.start_snapshot)) errors.push(`回合 ${t.turn_number} 起始快照不連續`);
     const hp = {}, sh = {};
@@ -372,6 +392,8 @@ export function verifyRecord(record) {
         sh[e.target_ids[0]] += e.calculation.amount;
       } else if (e.event_type === 'actor_defeated') {
         sh[e.actor_id] = 0;
+      } else if (e.event_type === 'status_removed') {
+        if (!ids.has(e.source_event_id) || byId[e.source_event_id].event_type !== 'heal_applied' || byId[e.source_event_id].target_ids[0] !== e.target_ids[0]) errors.push(`${e.event_id} 淨化沒有對應的治療事件`);
       } else if (e.event_type === 'phase_changed') {
         const c = record.combatants.find((x) => x.actor_id === e.actor_id);
         if (!c?.phase2 || !ids.has(e.source_event_id) || hp[e.actor_id] * 100 > c.hp_max * c.phase2.at_pct) errors.push(`${e.event_id} 階段轉換不合規則`);

@@ -129,7 +129,7 @@ test('演出：擊殺歸屬正確、引用真實事件；捏造會被驗證器�
 function playExpedition(g) {
   G.startExpedition(g);
   let guard = 0;
-  while (g.expedition && guard++ < 40) {
+  while (g.expedition && guard++ < 60) {
     const ex = g.expedition;
     for (const id of g.party) if (g.potions > 0 && ex.hp[id] < G.effectiveStats(g, id).hp * 0.4) G.usePotion(g, id);
     let idx = ex.choices.findIndex((c) => c.type !== 'battle'); if (idx < 0) idx = 0;
@@ -256,7 +256,6 @@ test('世界改變：擊敗 Boss 後地窖進入餘燼回流，遭遇與奇遇�
   assert.equal(G.dungeonState(g), 'ember_return');
   assert.ok(G.floorData(g, 0).encounters.flat().includes('ember_hound'));
   assert.equal(G.floorData(g, 0).name, '第一層・崩塌的儲藏室', '地名不變');
-  // 餘燼回流專屬奇遇只在對應狀態出現
   const seen = new Set();
   for (let s = 1; s <= 60; s++) {
     for (const flag of [false, true]) {
@@ -269,7 +268,7 @@ test('世界改變：擊敗 Boss 後地窖進入餘燼回流，遭遇與奇遇�
 });
 
 test('世界改變：玩到第一次擊敗 Boss 時寫入旗標與紀錄；之後 Boss 改掉落一般寶物', () => {
-  let g, n = 0;
+  let g;
   for (let s = 1; s <= 40 && !g; s++) {
     const h = G.newGame(s * 101);
     for (let run = 0; run < 4 && !h.flags.boss_defeated; run++) {
@@ -282,7 +281,7 @@ test('世界改變：玩到第一次擊敗 Boss 時寫入旗標與紀錄；之�
   assert.ok(g.log.some((l) => l.includes('餘燼回流')));
   assert.equal(g.flags.boss_kills, 1);
   assert.ok(g.inventory.includes('knight_shard') || Object.values(g.roster).some((r) => r.equip.weapon === 'knight_shard'));
-  for (let i = 0; i < 4 && g.flags.boss_kills < 2; i++) { playExpedition(g); n++; }
+  for (let i = 0; i < 4 && g.flags.boss_kills < 2; i++) playExpedition(g);
   if (g.flags.boss_kills >= 2) {
     const all = [...g.inventory, ...Object.values(g.roster).flatMap((r) => Object.values(r.equip))];
     assert.equal(all.filter((x) => x === 'knight_shard').length, 1, 'Boss 首殺獎勵只給一次');
@@ -301,11 +300,9 @@ test('營地談話：受限意圖、每人每天一次、只引用真實記憶�
   assert.throws(() => G.talk(g, { actor_id: 'airin', intent: 'past' }), /今天已經聊過/);
   assert.equal(g.affinity.airin, 1);
   assert.equal(JSON.stringify(Object.keys(g.roster).map((id) => G.effectiveStats(g, id))), statsBefore);
-  // 好感分段解鎖過去
   const tiers = [];
   for (let d = 0; d < 7; d++) { g.day += 1; tiers.push(G.talk(g, { actor_id: 'ade', intent: 'past' }).tier); }
   assert.deepEqual(tiers, [0, 0, 0, 1, 1, 1, 2]);
-  // 遠征中不能聊；談話引用的記憶必須存在
   g.day += 1;
   playExpedition(g);
   const r2 = G.talk(g, { actor_id: 'xiaomei', intent: 'recent' });
@@ -323,7 +320,7 @@ test('存檔相容：v0.3 存檔（沒有好感欄位）可以讀取並補上預
 });
 
 test('死裡逃生記憶：只在結束時仍站著且 HP ≤ 20% 時寫入，引用真實傷害事件，營火談話會引用', () => {
-  const rec = runAuto(mk(43, { enemies: ['goblin', 'slime', 'goblin'] }));
+  const rec = runAuto(mk(456, { enemies: ['goblin', 'goblin', 'goblin'] }));
   const mems = deriveMemories(rec, { careerKills: {}, existingKeys: new Set(), day: 1 }).filter((m) => m.type === 'brink');
   assert.ok(mems.length >= 1);
   assert.deepEqual(verifyMemories(mems, rec), []);
@@ -341,4 +338,94 @@ test('死裡逃生記憶：只在結束時仍站著且 HP ≤ 20% 時寫入，�
   const line = G.talk(g, { actor_id: id, intent: 'recent' });
   assert.match(line.text, /只剩一口氣/);
   assert.deepEqual(line.refs, [mems[0].key]);
+});
+
+// ── v0.5 ──────────────────────────────────────────
+import { itemDef, AFFIXES } from '../src/data.js';
+import { hashSeed } from '../src/rng.js';
+
+test('詞綴：物品 ID 解析、稀有度隨詞綴提升、非法組合被拒絕', () => {
+  assert.equal(itemDef('hunter_bow').rarity, '精良');
+  const two = itemDef('hunter_bow~keen~precise');
+  assert.equal(two.rarity, '史詩');
+  assert.equal(two.name, '鋒利・精準的獵人長弓');
+  assert.deepEqual(two.mods, { atk: 4, spd: 1, crit: 4 });
+  assert.equal(itemDef('rusty_blade~swift').rarity, '精良');
+  assert.equal(itemDef('ash_cloak~vital~sturdy').rarity, '史詩', '稀有度上限是史詩');
+  for (const bad of ['nope', 'hunter_bow~sturdy', 'hunter_bow~keen~keen', 'leather_vest~keen', 'temple_mail~vital~sturdy~swift', 42, null]) assert.equal(itemDef(bad), null, String(bad));
+});
+
+test('詞綴：掉落決定性；越深的樓層與餘燼回流越容易出詞綴', () => {
+  const rate = (floor, ember) => {
+    let n = 0;
+    for (let s = 0; s < 2000; s++) {
+      const id = G.rollAffixes('temple_mail', floor, ember, { rng: hashSeed('t', floor, ember, s) });
+      assert.ok(itemDef(id), id);
+      n += id.split('~').length - 1;
+    }
+    return n / 2000;
+  };
+  const r0 = rate(0, false), r2 = rate(2, false), r2e = rate(2, true);
+  assert.ok(r0 < r2 && r2 < r2e, `${r0} < ${r2} < ${r2e}`);
+  assert.equal(G.rollAffixes('hunter_bow', 2, true, { rng: 99 }), G.rollAffixes('hunter_bow', 2, true, { rng: 99 }));
+  const a = G.newGame(55), b = G.newGame(55);
+  playExpedition(a); playExpedition(b);
+  assert.deepEqual(a.inventory, b.inventory);
+});
+
+test('詞綴：裝備屬性會加總進角色；分解依稀有度給金幣且不能在遠征中分解', () => {
+  const g = G.newGame(3);
+  const base = G.effectiveStats(g, 'airin');
+  g.inventory.push('hunter_bow~keen~precise', 'rusty_blade');
+  G.equip(g, 'airin', 'hunter_bow~keen~precise');
+  const st = G.effectiveStats(g, 'airin');
+  assert.equal(st.atk, base.atk + 4); assert.equal(st.crit, base.crit + 4); assert.equal(st.spd, base.spd + 1);
+  const gold = g.gold;
+  assert.equal(G.salvage(g, 0), 5);
+  assert.equal(g.gold, gold + 5);
+  assert.deepEqual(g.inventory, []);
+  g.inventory.push('ash_cloak~vital');
+  G.startExpedition(g);
+  assert.throws(() => G.salvage(g, 0), /遠征中/);
+});
+
+test('存檔相容：舊格式物品可讀，未知物品被拒絕', () => {
+  const g = G.newGame(4);
+  g.inventory = ['hunter_bow', 'temple_mail~sturdy'];
+  g.roster.ade.equip.armor = 'leather_vest';
+  assert.deepEqual(G.deserialize(JSON.stringify(g)).inventory, ['hunter_bow', 'temple_mail~sturdy']);
+  g.inventory.push('god_slayer~keen');
+  assert.throws(() => G.deserialize(JSON.stringify(g)), /未知物品/);
+});
+
+test('淨化：治癒移除負面狀態，事件有來源、可重播；偽造的淨化會被擋下', () => {
+  let found = 0;
+  for (let s = 1; s <= 40; s++) {
+    const rec = runAuto(mk(s, { enemies: ['ash_acolyte', 'slime', 'goblin'], tactic: 'protect' }));
+    assert.deepEqual(verifyRecord(rec), []);
+    assert.equal(JSON.stringify(replay(rec)), JSON.stringify(rec));
+    const evs = allEvents(rec);
+    for (const e of evs.filter((x) => x.event_type === 'status_removed')) {
+      found++;
+      const src = evs.find((x) => x.event_id === e.source_event_id);
+      assert.equal(src.event_type, 'heal_applied');
+      assert.equal(src.target_ids[0], e.target_ids[0]);
+      assert.ok(['burn', 'bleed', 'weaken'].includes(e.after.status_id));
+      // 被淨化的狀態之後不會再造成持續傷害，直到被重新附加
+      const later = evs.filter((x) => x.sequence > e.sequence && x.target_ids[0] === e.target_ids[0]);
+      const reapplied = later.findIndex((x) => x.event_type === 'status_applied' && x.after.status_id === e.after.status_id);
+      const ticks = later.slice(0, reapplied < 0 ? undefined : reapplied).filter((x) => x.event_type === 'damage_applied' && x.flags?.dot && x.skill_id === e.after.status_id);
+      assert.equal(ticks.length, 0, `${e.event_id} 淨化後不該再有 ${e.after.status_id} 傷害`);
+    }
+    if (evs.some((x) => x.event_type === 'status_removed')) {
+      assert.match(simpleLog(rec).map((l) => l.text).join('\n'), /被淨化/);
+      assert.match(detailedLog(rec).map((l) => l.text).join('\n'), /被淨化（來源/);
+    }
+  }
+  assert.ok(found > 0, '有淨化發生');
+  const rec = runAuto(mk(2));
+  const t = rec.turns[0];
+  t.events.push({ event_id: 'fake', event_type: 'status_removed', actor_id: 'xiaomei', target_ids: ['ade'], source_event_id: t.events[0].event_id, before: { status_id: 'burn' }, after: { status_id: 'burn' } });
+  assert.ok(verifyRecord(rec).some((x) => x.includes('淨化')));
+  assert.ok(Object.keys(AFFIXES).length >= 5);
 });

@@ -9,6 +9,7 @@ const args = process.argv.slice(2);
 const DIST = args.includes('--dist');
 const ROOT = new URL(DIST ? '../dist/' : '..', import.meta.url).pathname;
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json' };
+const VERSION = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version;
 let server, base = args.find((a) => /^https?:/.test(a));
 if (!base) {
   server = createServer(async (req, res) => {
@@ -31,14 +32,14 @@ async function play(page, label) {
   await page.goto(base);
   await page.getByRole('button', { name: '新遊戲' }).click();
   check(await page.getByRole('button', { name: '出發遠征' }).isVisible(), `${label} 進入營地`);
-  check(await page.getByText(/v0\.5\.\d/).isVisible(), `${label} 顯示版本 v0.5`);
+  check(await page.getByText(`v${VERSION}`).first().isVisible(), `${label} 顯示版本 v${VERSION}`);
   // 營火談話：受限選單，聊完當天鎖住
   await page.locator('button[data-act="talk"][data-arg="ade:past"]').click();
   check(await page.locator('#talkResult').isVisible(), `${label} 營火談話有回應`);
   check(await page.locator('button[data-act="talk"][data-arg="ade:recent"]').isDisabled(), `${label} 同一天不能再找同一人聊`);
   await page.getByRole('button', { name: '出發遠征' }).click();
   let battles = 0, events = 0, safety = 0;
-  while (safety++ < 60) {
+  while (safety++ < 80) {
     const t = await page.locator('#app').innerText();
     if (t.includes('出發遠征')) break;
     if (await page.getByRole('button', { name: /^執行第|^下一回合/ }).count()) {
@@ -109,13 +110,21 @@ try {
   await desk.getByRole('button', { name: '繼續' }).click();
   check(await desk.getByText(/第 2 天/).isVisible(), 'desktop 重新整理後自動存檔可繼續');
   // 世界改變：匯入一個已擊敗 Boss 的存檔，營地顯示「餘燼回流」
-  const ember = JSON.parse(exported); ember.flags.boss_defeated = true;
+  const ember = JSON.parse(exported); ember.flags.boss_defeated = true; ember.inventory.push('hunter_bow~keen~precise');
   await desk.getByRole('button', { name: '設定' }).click();
   await desk.locator('details summary').click();
   await desk.locator('#pasteSave').fill(JSON.stringify(ember));
   await desk.getByRole('button', { name: '匯入貼上的存檔' }).click();
   await desk.getByRole('button', { name: '營地', exact: true }).click();
   check(await desk.getByText('餘燼回流').first().isVisible(), 'desktop 擊敗 Boss 後地城狀態改變');
+  // 詞綴裝備與分解（v0.5）
+  await desk.getByRole('button', { name: '裝備', exact: true }).click();
+  check(await desk.getByText('鋒利・精準的獵人長弓').isVisible() && await desk.locator('.rar-e').first().isVisible(), 'desktop 詞綴裝備顯示史詩稀有度');
+  const goldBefore = +(await desk.locator('.stats span').nth(1).innerText()).match(/\d+/)[0];
+  await desk.locator('button[data-act="salvage"]').last().click();
+  await desk.locator('button[data-act="salvageYes"]').click();
+  const goldAfter = +(await desk.locator('.stats span').nth(1).innerText()).match(/\d+/)[0];
+  check(await desk.getByText(/分解完成/).isVisible() && goldAfter === goldBefore + 35, `desktop 分解需二次確認並得到金幣（${goldBefore}→${goldAfter}）`);
   // 逐回合指揮模式
   await desk.getByRole('button', { name: '設定' }).click();
   await desk.locator('select[data-change="mode"]').selectOption('manual');

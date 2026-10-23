@@ -1,5 +1,5 @@
 // 遊戲狀態（純資料＋純函式，無 DOM）。UI 與測試都經由這裡操作。
-import { CHARACTERS, ENEMIES, ITEMS, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS } from './data.js';
+import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, SALVAGE_GOLD, itemDef } from './data.js';
 import { createBattle, stepRound, verifyRecord, pairKey, pairLevel } from './engine.js';
 import { hashSeed, rngInt } from './rng.js';
 import { deriveMemories, verifyMemories } from './memory.js';
@@ -28,7 +28,7 @@ export function effectiveStats(game, id) {
   const r = game.roster[id];
   const st = { ...base, hp: base.hp + (r.level - 1) * 6, atk: base.atk + (r.level - 1) };
   for (const slot of ['weapon', 'armor']) {
-    const it = ITEMS[r.equip[slot]];
+    const it = itemDef(r.equip[slot]);
     if (it) for (const [k, v] of Object.entries(it.mods)) st[k] = (st[k] || 0) + v;
   }
   return st;
@@ -61,7 +61,7 @@ export function setTactic(game, id, tactic) {
   game.tactics[id] = tactic;
 }
 export function equip(game, id, itemId) {
-  const it = ITEMS[itemId];
+  const it = itemDef(itemId);
   const idx = game.inventory.indexOf(itemId);
   if (!it || idx < 0) throw new Error('背包沒有這件裝備');
   const r = game.roster[id];
@@ -72,6 +72,18 @@ export function equip(game, id, itemId) {
 export function unequip(game, id, slot) {
   const r = game.roster[id];
   if (r.equip[slot]) { game.inventory.push(r.equip[slot]); r.equip[slot] = null; }
+}
+/** 分解背包中的裝備換金幣（依稀有度）。回傳獲得的金幣。 */
+export function salvage(game, idx) {
+  if (game.expedition) throw new Error('遠征中不能分解');
+  const id = game.inventory[idx];
+  const it = itemDef(id);
+  if (!it) throw new Error('背包沒有這件裝備');
+  game.inventory.splice(idx, 1);
+  const gold = SALVAGE_GOLD[it.rarity];
+  game.gold += gold;
+  game.log.push(`分解 ${it.name}，得到 ${gold} 金幣。`);
+  return gold;
 }
 export function buyPotion(game) {
   if (game.gold < POTION_PRICE) throw new Error('金幣不足');
@@ -126,10 +138,26 @@ function genChoices(game) {
   return opts;
 }
 
+// 掉落：先決定基礎物品，再依樓層與世界狀態擲詞綴（P07 稀有度掉落表）
 function lootRoll(game, salt) {
-  const floor = floorData(game, game.expedition.floor);
-  const r = { rng: hashSeed(game.seed, 'loot', game.expedition.id, game.expedition.floor, game.expedition.step, salt) };
-  return floor.loot[rngInt(r, floor.loot.length) - 1];
+  const fi = game.expedition.floor;
+  const floor = floorData(game, fi);
+  const r = { rng: hashSeed(game.seed, 'loot', game.expedition.id, fi, game.expedition.step, salt) };
+  const base = floor.loot[rngInt(r, floor.loot.length) - 1];
+  return rollAffixes(base, fi, dungeonState(game) === 'ember_return', r);
+}
+export function rollAffixes(base, floorIdx, ember, r) {
+  const slot = itemDef(base).slot;
+  const pool = Object.keys(AFFIXES).filter((a) => AFFIXES[a].slots.includes(slot));
+  const t = AFFIX_TABLE;
+  const p1 = t.first[floorIdx] + (ember ? t.emberBonus.first : 0);
+  const p2 = t.second[floorIdx] + (ember ? t.emberBonus.second : 0);
+  const out = [];
+  if (rngInt(r, 100) <= p1) {
+    out.push(pool[rngInt(r, pool.length) - 1]);
+    if (rngInt(r, 100) <= p2) { const rest = pool.filter((a) => !out.includes(a)); out.push(rest[rngInt(r, rest.length) - 1]); }
+  }
+  return [base, ...out].join('~');
 }
 
 function advance(game) {
@@ -154,7 +182,7 @@ export function chooseRoute(game, idx) {
   } else if (c.type === 'treasure') {
     const it = lootRoll(game, 'treasure');
     ex.loot.push(it); ex.gold += 10;
-    game.log.push(`拾得 ${ITEMS[it].name} 與 10 金幣。`);
+    game.log.push(`拾得 ${itemDef(it).name} 與 10 金幣。`);
   }
   advance(game);
   return 'map';
@@ -176,7 +204,7 @@ export function resolveEvent(game, choiceId) {
   if (f.flag) { game.flags[f.flag] = true; msgs.push('獲得情報'); }
   let loot = f.loot ? 1 : 0;
   if (f.lootChance) { const r = { rng: hashSeed(game.seed, 'kick', ex.id, ex.floor, ex.step) }; if (rngInt(r, 100) <= f.lootChance) loot = 1; else msgs.push('箱子紋絲不動'); }
-  if (loot) { const it = lootRoll(game, 'chest'); ex.loot.push(it); msgs.push(`獲得 ${ITEMS[it].name}`); }
+  if (loot) { const it = lootRoll(game, 'chest'); ex.loot.push(it); msgs.push(`獲得 ${itemDef(it).name}`); }
   game.log.push(`${ev.title}：${ch.label.split('（')[0]}${msgs.length ? '（' + msgs.join('，') + '）' : ''}`);
   advance(game);
   return msgs;
@@ -390,5 +418,8 @@ export function deserialize(text) {
   for (const r of g.reports || []) if (verifyRecord(r.record).length) throw new Error('存檔中的戰鬥紀錄驗證失敗');
   // v0.3 → v0.4 相容：補上新欄位
   g.affinity ||= {}; g.talked ||= {}; g.flags ||= {};
+  // 物品 ID 必須能解析（v0.5 詞綴格式向下相容）
+  const allItems = [...(g.inventory || []), ...Object.values(g.roster).flatMap((r) => Object.values(r.equip || {}).filter(Boolean)), ...(g.expedition?.loot || [])];
+  if (allItems.some((id) => !itemDef(id))) throw new Error('存檔中有未知物品');
   return g;
 }
