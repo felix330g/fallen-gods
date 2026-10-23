@@ -1,0 +1,25 @@
+{
+  "note": "人工編寫的最小結構示意，數值只用於展示格式；未包含完整逐回合引擎重播資訊",
+  "battle_id": "battle_demo_001",
+  "rules_version": "0.1-proposal",
+  "rng_seed": 20261012,
+  "encounter_id": "goblin_skirmish",
+  "combatants": [
+    {"actor_id":"airin","team":"party","hp_start":70,"hp_max":70},
+    {"actor_id":"ade","team":"party","hp_start":100,"hp_max":100},
+    {"actor_id":"xiaomei","team":"party","hp_start":50,"hp_max":50},
+    {"actor_id":"goblin","team":"enemy","hp_start":30,"hp_max":30}
+  ],
+  "turns": [{
+    "turn_number": 1,
+    "start_snapshot": {"hp":{"airin":70,"ade":100,"xiaomei":50,"goblin":30}},
+    "events": [
+      {"event_id":"e1","battle_id":"battle_demo_001","turn_number":1,"sequence":1,"event_type":"action_declared","actor_id":"goblin","target_ids":["airin"],"skill_id":"club_strike"},
+      {"event_id":"e2","battle_id":"battle_demo_001","turn_number":1,"sequence":2,"event_type":"damage_applied","actor_id":"goblin","target_ids":["ade"],"skill_id":"club_strike","before":{"hp":100},"calculation":{"base":10,"hp_damage":10,"shield_absorbed":0},"after":{"hp":90},"flags":{"intercepted_from":"airin"}},
+      {"event_id":"e3","battle_id":"battle_demo_001","turn_number":1,"sequence":3,"event_type":"damage_applied","actor_id":"airin","target_ids":["goblin"],"skill_id":"arrow_shot","before":{"hp":30},"calculation":{"base":30,"hp_damage":30,"shield_absorbed":0},"after":{"hp":0}},
+      {"event_id":"e4","battle_id":"battle_demo_001","turn_number":1,"sequence":4,"event_type":"actor_defeated","actor_id":"goblin","target_ids":[],"source_event_id":"e3"}
+    ],
+    "end_snapshot": {"hp":{"airin":70,"ade":90,"xiaomei":50,"goblin":0}}
+  }],
+  "result": {"outcome":"victory","winner_team":"party","ended_turn":1,"rewards":{"exp":20}}
+}

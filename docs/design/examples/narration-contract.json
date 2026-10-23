@@ -1,0 +1,18 @@
+{
+  "input_example": {
+    "moment_id":"rookie_observes_duo_01",
+    "source_event_ids":["e2","e3","e4"],
+    "known_facts":["阿德代替艾琳承受一次哥布林攻擊","艾琳隨後射殺哥布林","小梅在場旁觀"],
+    "persona":{"xiaomei":"初次遠征，緊張，容易觀察同伴","airin":"熟練弓箭手","ade":"習慣替前線隊友補位"},
+    "pov":"xiaomei",
+    "allowed":"至多兩句動作與內心感受；不得增添未發生的技能或戰鬥結果",
+    "max_chars":70
+  },
+  "output_example": {
+    "moment_id":"rookie_observes_duo_01",
+    "references_event_ids":["e2","e3"],
+    "lines":["小梅看著阿德架開攻擊、艾琳順勢射出最後一箭，握緊法杖的手心微微冒汗。", "他們好像在跳舞。"],
+    "tone":"緊張中帶著敬佩"
+  },
+  "validation": "所有引用 event ID 必須存在；模型輸出不得成為狀態更新；若違反長度、視角或事實限制就使用固定模板。"
+}
