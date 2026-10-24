@@ -1,12 +1,12 @@
 // 介面層：只讀寫 game.js 的 API，不直接改數值。
-import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef } from './data.js';
+import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef, statDiffText, inventoryOrder } from './data.js';
 import { stepRound, chooseAction, currentSkills, pairKey, pairLevel } from './engine.js';
 import * as G from './game.js';
 import { summary, simpleLog, detailedLog, computeStats, hpCurve } from './report.js';
 import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX } from './talk.js';
 
 const SAVE_KEY = 'fallen-gods-save-v1';
-const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', idFilter: null, hl: null, msg: null, err: null, exp: null, fromExpedition: false, talk: null };
+const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null };
 const root = () => document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TACTIC = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
@@ -117,9 +117,15 @@ function tabGear() {
     const r = g.roster[c.id];
     return `<tr><td>${esc(c.name)}</td>${['weapon', 'armor'].map((s) => `<td style="text-align:left">${r.equip[s] ? `${itemText(r.equip[s])} <button class="link" data-act="unequip" data-arg="${c.id}:${s}">卸下</button>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`;
   }).join('');
-  const inv = g.inventory.length ? g.inventory.map((it, i) => `<div class="row invrow"><span class="invname">${itemText(it)}</span>
-      <select data-change="equip" data-arg="${i}"><option value="">裝備給…</option>${Object.values(CHARACTERS).map((c) => `<option value="${c.id}">${c.name}</option>`).join('')}</select>
-      ${ui.confirm === `salvage:${i}` ? `<span class="confirm"><b>分解換 ${SALVAGE_GOLD[itemDef(it).rarity]} 金幣？</b><button data-act="salvageYes" data-arg="${i}">分解</button><button data-act="cancelConfirm">取消</button></span>` : `<button class="small" data-act="salvage" data-arg="${i}">分解</button>`}</div>`).join('')
+  const equipOpts = (it) => Object.values(CHARACTERS).map((c) => {
+    const cur = g.roster[c.id].equip[itemDef(it).slot];
+    return `<option value="${c.id}">${c.name}（${statDiffText(it, cur)}）</option>`;
+  }).join('');
+  const SORTS = { default: '取得順序', rarity: '稀有度', slot: '部位' };
+  const sortSel = `<div class="row small">排序 <select data-change="invSort">${Object.entries(SORTS).map(([k, n]) => `<option value="${k}" ${ui.invSort === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div>`;
+  const inv = g.inventory.length ? sortSel + inventoryOrder(g.inventory, ui.invSort).map((i) => { const it = g.inventory[i]; return `<div class="row invrow"><span class="invname">${itemText(it)}</span>
+      <select data-change="equip" data-arg="${i}"><option value="">裝備給…</option>${equipOpts(it)}</select>
+      ${ui.confirm === `salvage:${i}` ? `<span class="confirm"><b>分解換 ${SALVAGE_GOLD[itemDef(it).rarity]} 金幣？</b><button data-act="salvageYes" data-arg="${i}">分解</button><button data-act="cancelConfirm">取消</button></span>` : `<button class="small" data-act="salvage" data-arg="${i}">分解</button>`}</div>`; }).join('')
     : '<p class="muted">背包是空的。遠征中撿到的物品只有平安回來才會入袋。</p>';
   return `<div class="panel"><h2>裝備</h2><div class="tablewrap"><table><tr><th>角色</th><th style="text-align:left">武器</th><th style="text-align:left">防具</th></tr>${rows}</table></div></div>
     <div class="panel"><h3>背包</h3><p class="small muted">越深的樓層越容易掉落帶詞綴的裝備；每多一個詞綴，稀有度提升一級（普通→精良→稀有→史詩）。用不到的可以分解換金幣。</p>${inv}</div>`;
@@ -378,6 +384,7 @@ function change(name, arg, value) {
   switch (name) {
     case 'tactic': G.setTactic(game, arg, value); save(); break;
     case 'equip': if (value) { G.equip(game, value, game.inventory[+arg]); save(); } break;
+    case 'invSort': ui.invSort = value; break;
     case 'density': game.settings.density = +value; save(); break;
     case 'mode': game.settings.mode = value; save(); break;
     case 'theme': if (value) document.documentElement.dataset.theme = value; else delete document.documentElement.dataset.theme; try { localStorage.setItem('fallen-gods-theme', value); } catch { /* ignore */ } break;

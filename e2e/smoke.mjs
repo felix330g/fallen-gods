@@ -24,6 +24,7 @@ if (process.env.CHROMIUM_PATH) launch.executablePath = process.env.CHROMIUM_PATH
 const browser = await chromium.launch(launch);
 const errors = [];
 let ok = 0;
+let gearSave = null; // 含背包裝備的存檔，給手機寬度檢查重用
 const check = (cond, msg) => { if (!cond) throw new Error('E2E 失敗：' + msg); ok++; console.log('  ✓', msg); };
 
 async function play(page, label) {
@@ -110,7 +111,7 @@ try {
   await desk.getByRole('button', { name: '繼續' }).click();
   check(await desk.getByText(/第 2 天/).isVisible(), 'desktop 重新整理後自動存檔可繼續');
   // 世界改變：匯入一個已擊敗 Boss 的存檔，營地顯示「餘燼回流」
-  const ember = JSON.parse(exported); ember.flags.boss_defeated = true; ember.inventory.push('hunter_bow~keen~precise');
+  const ember = JSON.parse(exported); ember.flags.boss_defeated = true; ember.inventory = ['rusty_blade', 'rusty_blade', 'temple_mail~sturdy', 'hunter_bow~keen~precise']; gearSave = ember;
   await desk.getByRole('button', { name: '設定' }).click();
   await desk.locator('details summary').click();
   await desk.locator('#pasteSave').fill(JSON.stringify(ember));
@@ -120,11 +121,30 @@ try {
   // 詞綴裝備與分解（v0.5）
   await desk.getByRole('button', { name: '裝備', exact: true }).click();
   check(await desk.getByText('鋒利・精準的獵人長弓').isVisible() && await desk.locator('.rar-e').first().isVisible(), 'desktop 詞綴裝備顯示史詩稀有度');
+  // 裝備比較與背包排序（v0.6）
+  const names = () => desk.locator('.invrow .invname').allInnerTexts().then((a) => a.map((t) => t.split('\n')[0].replace(/(普通|精良|稀有|史詩).*$/, '').trim()));
+  const optTexts = (row) => row.locator('select[data-change="equip"] option').allInnerTexts();
+  const rowOf = (name) => desk.locator('.invrow').filter({ hasText: name });
+  check((await optTexts(rowOf('生鏽短劍').first())).includes('艾琳（攻 +2）'), 'desktop 空著的部位列出全部屬性');
+  await desk.locator('.invrow').first().locator('select[data-change="equip"]').selectOption('ade');
+  check((await optTexts(rowOf('生鏽短劍'))).includes('阿德（相同）'), 'desktop 同裝備顯示「相同」');
+  check((await optTexts(rowOf('獵人長弓'))).includes('阿德（攻 +2、速 +1、暴 +4）'), 'desktop 屬性差數字正確');
+  check((await optTexts(rowOf('神殿鏈甲'))).includes('小梅（生命 +10、防 +3）'), 'desktop 防具比較（空部位）');
+  check((await names()).join('|') === '生鏽短劍|堅固的神殿鏈甲|鋒利・精準的獵人長弓', 'desktop 預設為取得順序: ' + (await names()).join('|'));
+  await desk.locator('select[data-change="invSort"]').selectOption('rarity');
+  check((await names()).join('|') === '鋒利・精準的獵人長弓|堅固的神殿鏈甲|生鏽短劍', 'desktop 依稀有度排序');
+  await desk.locator('select[data-change="invSort"]').selectOption('slot');
+  check((await names()).join('|') === '生鏽短劍|鋒利・精準的獵人長弓|堅固的神殿鏈甲', 'desktop 依部位排序');
+  await desk.locator('select[data-change="invSort"]').selectOption('rarity');
+  // 排序後裝備與分解仍作用在正確物品
+  await rowOf('神殿鏈甲').locator('select[data-change="equip"]').selectOption('airin');
+  check(await desk.locator('tr', { hasText: '艾琳' }).getByText('堅固的神殿鏈甲').isVisible(), 'desktop 排序後裝備到正確物品');
   const goldBefore = +(await desk.locator('.stats span').nth(1).innerText()).match(/\d+/)[0];
-  await desk.locator('button[data-act="salvage"]').last().click();
+  await rowOf('獵人長弓').locator('button[data-act="salvage"]').click();
   await desk.locator('button[data-act="salvageYes"]').click();
   const goldAfter = +(await desk.locator('.stats span').nth(1).innerText()).match(/\d+/)[0];
-  check(await desk.getByText(/分解完成/).isVisible() && goldAfter === goldBefore + 35, `desktop 分解需二次確認並得到金幣（${goldBefore}→${goldAfter}）`);
+  check(await desk.getByText(/分解完成/).isVisible() && goldAfter === goldBefore + 35, `desktop 排序後分解需二次確認並得到金幣（${goldBefore}→${goldAfter}）`);
+  check((await names()).join('|') === '生鏽短劍', 'desktop 分解後只剩正確的物品');
   // 逐回合指揮模式
   await desk.getByRole('button', { name: '設定' }).click();
   await desk.locator('select[data-change="mode"]').selectOption('manual');
@@ -143,6 +163,14 @@ try {
   await play(phone, 'mobile');
   const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check(overflow <= 0, `mobile 沒有水平捲動（${overflow}px）`);
+  await phone.getByRole('button', { name: '設定' }).click();
+  await phone.locator('details summary').click();
+  await phone.locator('#pasteSave').fill(JSON.stringify(gearSave));
+  await phone.getByRole('button', { name: '匯入貼上的存檔' }).click();
+  await phone.getByRole('button', { name: '裝備', exact: true }).click();
+  await phone.locator('select[data-change="invSort"]').selectOption('rarity');
+  const gearOverflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(await phone.locator('.invrow').count() === 4 && gearOverflow <= 0, `mobile 背包（含比較文字與排序）沒有水平捲動（${gearOverflow}px）`);
   await phone.screenshot({ path: 'e2e/shot-mobile.png', fullPage: true });
   check(errors.length === 0, '瀏覽器沒有 JS 錯誤' + (errors.length ? '：' + errors.join(' | ') : ''));
   console.log(`E2E 通過：${ok} 項`);

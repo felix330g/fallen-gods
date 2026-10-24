@@ -1,5 +1,5 @@
 // 戰報：全部是從 BattleRecord 衍生的純函式。
-import { SKILLS, STATUSES, BONDS } from './data.js';
+import { SKILLS, STATUSES, BONDS, AFFIXES } from './data.js';
 
 const nameOf = (rec, id) => rec.combatants.find((c) => c.actor_id === id)?.name ?? id;
 const skillName = (id) => SKILLS[id]?.name ?? STATUSES[id]?.name ?? (id === 'chain_followup' ? '連攜追擊' : id);
@@ -141,7 +141,7 @@ export function detailedLog(rec, discoveries = {}) {
       case 'hit_check': d = `命中率 ${c.chance}% 擲 ${c.roll} → ${c.success ? '命中' : '未命中'}`; break;
       case 'critical_check': d = `暴擊率 ${c.chance}% 擲 ${c.roll} → ${c.success ? '暴擊' : '否'}`; break;
       case 'damage_applied': {
-        if (c.dot) d = `${skillName(e.skill_id)} ${c.power}×${c.stacks} 層 = ${c.raw_damage}`;
+        if (c.dot) d = `${skillName(e.skill_id)} ${c.power}×${c.stacks} 層${c.resist_ids ? `，${c.resist_ids.map((r) => AFFIXES[r]?.name ?? r).join('・')}減免 ${c.resisted}` : ''} = ${c.raw_damage}`;
         else {
           const h = hiddenText(e, discoveries);
           d = `攻擊 ${c.attack}×${c.multiplier}%${c.critical ? '×150%' : ''} = ${c.base}，防禦 ${c.defense}${h ? `（含${h}）` : ''} → ${c.raw_damage}`;

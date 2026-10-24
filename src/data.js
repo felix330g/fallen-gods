@@ -1,5 +1,5 @@
 // 遊戲資料。所有角色與數值皆為「垂直切片測試用」，非正式設定。
-export const RULES_VERSION = '0.5.1';
+export const RULES_VERSION = '0.6.0';
 
 export const SKILLS = {
   arrow_shot: { id: 'arrow_shot', name: '射擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
@@ -82,7 +82,11 @@ export const AFFIXES = {
   swift: { id: 'swift', name: '迅捷', slots: ['weapon', 'armor'], mods: { spd: 1 } },
   sturdy: { id: 'sturdy', name: '堅固', slots: ['armor'], mods: { def: 1 } },
   vital: { id: 'vital', name: '強韌', slots: ['armor'], mods: { hp: 8 } },
+  // 抵抗類詞綴：沒有屬性加成，效果由引擎處理（見 RESISTS）
+  fireproof: { id: 'fireproof', name: '耐火', slots: ['armor'], mods: {} },
 };
+// 抵抗詞綴 → 抵抗的持續傷害狀態。受到該狀態的 status_tick 傷害時減半（無條件捨去，最少 1）
+export const RESISTS = { fireproof: 'burn' };
 // 掉落詞綴機率（百分比），依樓層；餘燼回流時另外加成
 export const AFFIX_TABLE = { first: [20, 35, 50], second: [0, 10, 20], emberBonus: { first: 15, second: 10 } };
 export const SALVAGE_GOLD = { 普通: 5, 精良: 10, 稀有: 20, 史詩: 35 };
@@ -100,6 +104,21 @@ export function itemDef(id) {
   const rarity = RARITIES[Math.min(RARITIES.length - 1, RARITIES.indexOf(base.rarity) + affixes.length)];
   const name = affixes.length ? `${affixes.map((a) => a.name).join('・')}的${base.name}` : base.name;
   return { id, base: baseId, slot: base.slot, name, rarity, mods, affixes: affixIds };
+}
+
+const STAT_LABEL = { hp: '生命', atk: '攻', def: '防', spd: '速', crit: '暴' };
+/** 換裝屬性差文字：newId 相對 oldId（可為空＝該部位沒裝備）。無差異回傳「相同」。 */
+export function statDiffText(newId, oldId) {
+  const a = itemDef(newId)?.mods ?? {}, b = itemDef(oldId)?.mods ?? {};
+  const parts = Object.keys(STAT_LABEL).map((k) => [k, (a[k] || 0) - (b[k] || 0)]).filter(([, d]) => d !== 0)
+    .map(([k, d]) => `${STAT_LABEL[k]} ${d > 0 ? '+' : '−'}${Math.abs(d)}`);
+  return parts.length ? parts.join('、') : '相同';
+}
+/** 背包顯示順序（原始索引陣列）。只影響顯示，不改 inventory。mode: default／rarity（高→低）／slot（武器→防具）。 */
+export function inventoryOrder(inventory, mode) {
+  const idx = inventory.map((_, i) => i);
+  const key = { rarity: (i) => -RARITIES.indexOf(itemDef(inventory[i]).rarity), slot: (i) => ['weapon', 'armor'].indexOf(itemDef(inventory[i]).slot) }[mode];
+  return key ? idx.sort((x, y) => key(x) - key(y) || x - y) : idx;
 }
 
 // 地城：每層 3 步，每步兩個選擇；第 3 層最後一步固定是 Boss

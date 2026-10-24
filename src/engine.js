@@ -1,6 +1,6 @@
 // 戰鬥引擎：唯一權威。所有結果寫成 append-only 事件，戰報／演出／記憶都只讀事件。
 import { rngInt } from './rng.js';
-import { SKILLS, STATUSES, BONDS, RULES_VERSION, MAX_ROUNDS } from './data.js';
+import { SKILLS, STATUSES, BONDS, RESISTS, RULES_VERSION, MAX_ROUNDS } from './data.js';
 
 export const pairKey = (a, b) => [a, b].sort().join('|');
 export const pairLevel = (xp) => Math.min(4, Math.floor((xp || 0) / 25));
@@ -18,6 +18,7 @@ export function createBattle({ battleId, seed, combatants, pairLevels = {}, maxR
       actor_id: c.actor_id, name: c.name, team: c.team, type_id: c.type_id || c.actor_id,
       stats: { ...c.stats }, hp_max: c.hp_max ?? c.stats.hp, hp_start: c.hp_start ?? c.stats.hp,
       skills: [...c.skills], tactic: c.tactic || 'balanced', boss: !!c.boss, rival: !!c.rival,
+      ...(c.resist_ids?.length ? { resist_ids: [...c.resist_ids] } : {}),
       ...(c.phase2 ? { phase2: clone(c.phase2) } : {}),
     })),
     pair_levels: { ...pairLevels },
@@ -312,8 +313,12 @@ function endOfRound(state, turn) {
     for (const s of [...a.statuses]) {
       const def = STATUSES[s.status_id];
       if (def.dot && a.alive) {
-        const dmg = s.power * s.stacks;
-        const ev = applyDamage(state, turn, s.source_id, c.actor_id, s.status_id, { raw_damage: dmg, dot: true, stacks: s.stacks, power: s.power }, { dot: true });
+        const full = s.power * s.stacks;
+        const resist_ids = (c.resist_ids || []).filter((r) => RESISTS[r] === s.status_id);
+        const dmg = resist_ids.length ? Math.max(1, Math.floor(full / 2)) : full;
+        const calc = { raw_damage: dmg, dot: true, stacks: s.stacks, power: s.power };
+        if (resist_ids.length) { calc.resist_ids = resist_ids; calc.resisted = full - dmg; }
+        const ev = applyDamage(state, turn, s.source_id, c.actor_id, s.status_id, calc, { dot: true });
         ev.event_type = 'damage_applied';
         ev.reason_code = 'status_tick';
         if (checkEnd(state, turn)) return;
@@ -385,6 +390,14 @@ export function verifyRecord(record) {
         const id = e.target_ids[0];
         if (hp[id] !== e.before.hp || sh[id] !== e.before.shield) errors.push(`${e.event_id} before 不符`);
         sh[id] -= e.calculation.shield_absorbed; hp[id] -= e.calculation.hp_damage;
+        if (e.calculation.dot) {
+          const c = record.combatants.find((x) => x.actor_id === id);
+          const full = e.calculation.power * e.calculation.stacks;
+          const want = (c.resist_ids || []).filter((r) => RESISTS[r] === e.skill_id);
+          const got = e.calculation.resist_ids || [];
+          const expect = want.length ? Math.max(1, Math.floor(full / 2)) : full;
+          if (JSON.stringify(want) !== JSON.stringify(got) || e.calculation.raw_damage !== expect || (e.calculation.resisted || 0) !== full - expect) errors.push(`${e.event_id} 持續傷害減免對不上`);
+        }
         if (e.calculation.shield_absorbed + e.calculation.hp_damage + e.calculation.overkill !== e.calculation.raw_damage) errors.push(`${e.event_id} 傷害拆分不平衡`);
       } else if (e.event_type === 'heal_applied') {
         hp[e.target_ids[0]] += e.calculation.effective;

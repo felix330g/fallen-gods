@@ -10,7 +10,7 @@ import * as G from '../src/game.js';
 const mk = (seed, opts = {}) => createBattle({
   battleId: 't' + seed, seed, pairLevels: opts.pairLevels || {},
   combatants: [
-    ...(opts.party || ['airin', 'ade', 'xiaomei']).map((id) => ({ actor_id: id, name: CHARACTERS[id].name, team: 'party', stats: { ...CHARACTERS[id].stats }, skills: CHARACTERS[id].skills, tactic: opts.tactic })),
+    ...(opts.party || ['airin', 'ade', 'xiaomei']).map((id) => ({ actor_id: id, name: CHARACTERS[id].name, team: 'party', stats: { ...CHARACTERS[id].stats }, skills: CHARACTERS[id].skills, tactic: opts.tactic, resist_ids: opts.resist?.[id] })),
     ...(opts.enemies || ['goblin', 'slime']).map((id, i) => ({ actor_id: `${id}_${i + 1}`, type_id: id, name: ENEMIES[id].name, team: 'enemy', stats: { ...ENEMIES[id].stats }, skills: ENEMIES[id].skills, rival: ENEMIES[id].rival, boss: ENEMIES[id].boss, phase2: ENEMIES[id].phase2 })),
   ],
 });
@@ -341,7 +341,7 @@ test('死裡逃生記憶：只在結束時仍站著且 HP ≤ 20% 時寫入，�
 });
 
 // ── v0.5 ──────────────────────────────────────────
-import { itemDef, AFFIXES } from '../src/data.js';
+import { itemDef, AFFIXES, statDiffText, inventoryOrder } from '../src/data.js';
 import { hashSeed } from '../src/rng.js';
 
 test('詞綴：物品 ID 解析、稀有度隨詞綴提升、非法組合被拒絕', () => {
@@ -428,4 +428,104 @@ test('淨化：治癒移除負面狀態，事件有來源、可重播；偽造�
   t.events.push({ event_id: 'fake', event_type: 'status_removed', actor_id: 'xiaomei', target_ids: ['ade'], source_event_id: t.events[0].event_id, before: { status_id: 'burn' }, after: { status_id: 'burn' } });
   assert.ok(verifyRecord(rec).some((x) => x.includes('淨化')));
   assert.ok(Object.keys(AFFIXES).length >= 5);
+});
+
+test('耐火詞綴：灼燒持續傷害減半（捨去、最少 1），計算寫進事件、可重播，偽造減免被擋下', () => {
+  assert.equal(itemDef('leather_vest~fireproof').name, '耐火的皮背心');
+  assert.equal(itemDef('leather_vest~fireproof').rarity, '精良');
+  assert.equal(itemDef('rusty_blade~fireproof'), null, '武器不能帶耐火');
+  const burnTicks = (rec, id) => allEvents(rec).filter((e) => e.event_type === 'damage_applied' && e.calculation.dot && e.skill_id === 'burn' && e.target_ids[0] === id);
+  let withResist = 0, without = 0;
+  for (let s = 1; s <= 40; s++) {
+    const opts = { enemies: ['ash_acolyte', 'ash_acolyte', 'goblin'] };
+    const plain = runAuto(mk(s, opts));
+    const res = runAuto(mk(s, { ...opts, resist: { ade: ['fireproof'] } }));
+    assert.deepEqual(verifyRecord(res), []);
+    assert.equal(JSON.stringify(replay(res)), JSON.stringify(res), '重播一致');
+    for (const e of burnTicks(res, 'ade')) {
+      withResist++;
+      const full = e.calculation.power * e.calculation.stacks;
+      assert.deepEqual(e.calculation.resist_ids, ['fireproof']);
+      assert.equal(e.calculation.raw_damage, Math.max(1, Math.floor(full / 2)));
+      assert.equal(e.calculation.resisted, full - e.calculation.raw_damage);
+    }
+    for (const e of burnTicks(plain, 'ade')) { without++; assert.equal(e.calculation.raw_damage, e.calculation.power * e.calculation.stacks); assert.equal(e.calculation.resist_ids, undefined); }
+    for (const e of burnTicks(res, 'airin')) assert.equal(e.calculation.resist_ids, undefined, '沒穿的人不減免');
+    if (burnTicks(res, 'ade').length) assert.match(detailedLog(res).map((l) => l.text).join('\n'), /耐火減免 \d+/);
+  }
+  assert.ok(withResist > 0 && without > 0, '兩種情況都有灼燒');
+  // 最少 1：持續傷害 1 點時不會減到 0
+  const st = mk(3, { resist: { airin: ['fireproof'] } });
+  st.actors.airin.statuses.push({ status_id: 'burn', stacks: 1, remaining_turns: 2, source_id: 'goblin_1', power: 1 });
+  stepRound(st);
+  const tick = allEvents(st.record).find((e) => e.calculation?.dot && e.target_ids[0] === 'airin');
+  assert.equal(tick.calculation.raw_damage, 1);
+  assert.equal(tick.calculation.resisted, 0);
+  // 偽造：沒有耐火卻宣稱減免、或減免數字對不上
+  const forged = runAuto(mk(1, { enemies: ['ash_acolyte', 'ash_acolyte', 'goblin'], resist: { ade: ['fireproof'] } }));
+  const fe = allEvents(forged).find((e) => e.calculation?.dot && e.skill_id === 'burn' && e.target_ids[0] === 'ade');
+  assert.ok(fe, '種子 1 有阿德被灼燒');
+  fe.calculation.resisted += 1;
+  assert.ok(verifyRecord(forged).some((x) => x.includes('減免')), '改數字被擋');
+  const noRes = runAuto(mk(1, { enemies: ['ash_acolyte', 'ash_acolyte', 'goblin'] }));
+  const dot = allEvents(noRes).find((e) => e.calculation?.dot && e.skill_id === 'burn');
+  assert.ok(dot);
+  dot.calculation.resist_ids = ['fireproof']; dot.calculation.resisted = 1; dot.calculation.raw_damage -= 1;
+  assert.ok(verifyRecord(noRes).some((x) => x.includes('減免')), '沒有耐火卻宣稱減免被擋');
+});
+
+test('耐火詞綴：裝備後進入戰鬥紀錄的 resist_ids', () => {
+  const g = G.newGame(7);
+  g.roster.ade.equip.armor = 'leather_vest~fireproof';
+  assert.deepEqual(G.resistIds(g, 'ade'), ['fireproof']);
+  assert.deepEqual(G.resistIds(g, 'airin'), []);
+  assert.deepEqual(G.deserialize(JSON.stringify(g)).roster.ade.equip.armor, 'leather_vest~fireproof');
+});
+
+test('治療救起瀕死隊友記憶：<30% 觸發、30% 不觸發、自己治療自己不觸發，去重，引用真實事件，營火談話引用', () => {
+  const hpCase = (seed, hp, who) => {
+    const st = createBattle({ battleId: 'h' + seed, seed, combatants: [
+      ...['airin', 'ade', 'xiaomei'].map((id) => ({ actor_id: id, name: CHARACTERS[id].name, team: 'party', stats: { ...CHARACTERS[id].stats, hp: 100 }, skills: CHARACTERS[id].skills, tactic: 'protect', hp_start: id === who ? hp : 100 })),
+      { actor_id: 'goblin_1', type_id: 'goblin', name: '哥布林', team: 'enemy', stats: { ...ENEMIES.goblin.stats }, skills: ENEMIES.goblin.skills },
+    ] });
+    stepRound(st);
+    return st.record;
+  };
+  const mem = (rec) => deriveMemories(rec, { careerKills: {}, existingKeys: new Set(), day: 1 }).filter((m) => m.type === 'heal_save');
+  const r29 = hpCase(1, 29, 'ade');
+  const heal = allEvents(r29).find((e) => e.event_type === 'heal_applied' && e.target_ids[0] === 'ade');
+  assert.equal(heal.before.hp, 29);
+  const m29 = mem(r29);
+  assert.equal(m29.length, 1);
+  assert.equal(m29[0].key, `heal_save:${pairKey('xiaomei', 'ade')}`);
+  assert.deepEqual(m29[0].actors, ['xiaomei', 'ade']);
+  assert.deepEqual(m29[0].event_ids, [heal.event_id]);
+  assert.deepEqual(verifyMemories(m29, r29), []);
+  assert.match(m29[0].text, new RegExp(`HP 29/100.*恢復 ${heal.calculation.effective} 點`));
+  const r30 = hpCase(1, 30, 'ade');
+  assert.ok(allEvents(r30).some((e) => e.event_type === 'heal_applied' && e.target_ids[0] === 'ade' && e.before.hp === 30));
+  assert.equal(mem(r30).length, 0, '30% 不觸發');
+  const self = hpCase(1, 29, 'xiaomei');
+  assert.ok(allEvents(self).some((e) => e.event_type === 'heal_applied' && e.target_ids[0] === 'xiaomei' && e.actor_id === 'xiaomei'));
+  assert.equal(mem(self).length, 0, '自己治療自己不觸發');
+  assert.equal(deriveMemories(r29, { careerKills: {}, existingKeys: new Set(m29.map((m) => m.key)), day: 1 }).filter((m) => m.type === 'heal_save').length, 0, '重看戰報不重複');
+  const g = G.newGame(3);
+  g.memories = [m29[0]];
+  assert.match(G.talk(g, { actor_id: 'xiaomei', intent: 'recent' }).text, /幸好來得及/);
+  assert.match(G.talk(g, { actor_id: 'ade', intent: 'recent' }).text, /欠一次人情/);
+  assert.deepEqual(G.deserialize(JSON.stringify(g)).memories.map((m) => m.key), [m29[0].key]);
+});
+
+test('裝備比較與背包排序：屬性差文字正確；排序只回傳顯示順序、不改背包', () => {
+  assert.equal(statDiffText('hunter_bow', 'rusty_blade'), '攻 +1、速 +1');
+  assert.equal(statDiffText('rusty_blade', 'hunter_bow'), '攻 −1、速 −1');
+  assert.equal(statDiffText('rusty_blade', 'rusty_blade'), '相同');
+  assert.equal(statDiffText('temple_mail', null), '生命 +10、防 +2');
+  assert.equal(statDiffText('leather_vest~fireproof', 'leather_vest'), '相同');
+  const inv = ['rusty_blade', 'temple_mail~sturdy', 'hunter_bow~keen~precise', 'leather_vest'];
+  const copy = [...inv];
+  assert.deepEqual(inventoryOrder(inv, 'default'), [0, 1, 2, 3]);
+  assert.deepEqual(inventoryOrder(inv, 'rarity'), [2, 1, 0, 3]);
+  assert.deepEqual(inventoryOrder(inv, 'slot'), [0, 2, 1, 3]);
+  assert.deepEqual(inv, copy);
 });

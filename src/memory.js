@@ -2,6 +2,9 @@
 import { pairKey } from './engine.js';
 import { allEvents } from './report.js';
 
+// 「瀕死」門檻（最大 HP 的百分比）：守護救援與治療救援共用
+export const NEAR_DEATH_PCT = 30;
+
 const nameOf = (rec, id) => rec.combatants.find((c) => c.actor_id === id)?.name ?? id;
 
 /**
@@ -32,14 +35,20 @@ export function deriveMemories(rec, ctx) {
         const from = e.flags?.intercepted_from;
         if (from && !e.flags.dot) {
           const ally = rec.combatants.find((c) => c.actor_id === from);
-          if (ally.team === 'party' && hp[from] * 100 < ally.hp_max * 30) {
+          if (ally.team === 'party' && hp[from] * 100 < ally.hp_max * NEAR_DEATH_PCT) {
             add(`guard_save:${pairKey(tgt, from)}`, 'guard_save', [tgt, from], [e.event_id],
               `${nameOf(rec, tgt)} 在 ${nameOf(rec, from)} 瀕死時替她擋下了致命一擊。`);
           }
         }
         hp[tgt] = e.after.hp;
       } else if (e.event_type === 'heal_applied') {
-        hp[e.target_ids[0]] = e.after.hp;
+        const tgt = e.target_ids[0], healer = e.actor_id;
+        const ally = rec.combatants.find((c) => c.actor_id === tgt);
+        if (healer !== tgt && ally.team === 'party' && e.before.hp * 100 < ally.hp_max * NEAR_DEATH_PCT) {
+          add(`heal_save:${pairKey(healer, tgt)}`, 'heal_save', [healer, tgt], [e.event_id],
+            `${nameOf(rec, healer)} 在 ${nameOf(rec, tgt)} 瀕死（HP ${e.before.hp}/${ally.hp_max}）時治療了 ${nameOf(rec, tgt)}，恢復 ${e.calculation.effective} 點。`);
+        }
+        hp[tgt] = e.after.hp;
       } else if (e.event_type === 'actor_defeated') {
         const src = byId[e.source_event_id];
         const killer = src?.actor_id;

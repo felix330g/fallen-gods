@@ -1,5 +1,5 @@
 // 遊戲狀態（純資料＋純函式，無 DOM）。UI 與測試都經由這裡操作。
-import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, SALVAGE_GOLD, itemDef } from './data.js';
+import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, RESISTS, SALVAGE_GOLD, itemDef } from './data.js';
 import { createBattle, stepRound, verifyRecord, pairKey, pairLevel } from './engine.js';
 import { hashSeed, rngInt } from './rng.js';
 import { deriveMemories, verifyMemories } from './memory.js';
@@ -32,6 +32,13 @@ export function effectiveStats(game, id) {
     if (it) for (const [k, v] of Object.entries(it.mods)) st[k] = (st[k] || 0) + v;
   }
   return st;
+}
+
+/** 裝備詞綴帶來的抵抗（目前只有防具的耐火） */
+export function resistIds(game, id) {
+  const out = [];
+  for (const slot of ['weapon', 'armor']) for (const a of itemDef(game.roster[id].equip[slot])?.affixes ?? []) if (RESISTS[a] && !out.includes(a)) out.push(a);
+  return out;
 }
 
 export const pairXp = (game, a, b) => game.pairs[pairKey(a, b)]?.xp || 0;
@@ -255,6 +262,7 @@ export function beginBattle(game) {
   const n = game.battles_fought + 1;
   const combatants = game.party.map((id) => ({
     actor_id: id, name: CHARACTERS[id].name, team: 'party', stats: effectiveStats(game, id), skills: CHARACTERS[id].skills, tactic: game.tactics[id], hp_start: ex.hp[id],
+    resist_ids: resistIds(game, id),
   }));
   const counts = {};
   for (const eid of ex.pending.enemies) {
