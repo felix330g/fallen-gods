@@ -39,6 +39,11 @@ export function deriveMemories(rec, ctx) {
             add(`guard_save:${pairKey(tgt, from)}`, 'guard_save', [tgt, from], [e.event_id],
               `${nameOf(rec, tgt)} 在 ${nameOf(rec, from)} 瀕死時替她擋下了致命一擊。`);
           }
+          // 首次觀察到黑盒子效果：只記事實（傷害數字取自事件），不揭露效果名稱與數值
+          if (ally.team === 'party' && e.calculation.hidden_modifier_ids?.length) {
+            add(`bond_oddity:${pairKey(tgt, from)}`, 'bond_oddity', [tgt, from], [e.event_id],
+              `${nameOf(rec, tgt)} 替 ${nameOf(rec, from)} 擋下攻擊，只受到 ${e.calculation.raw_damage} 點傷害——戰報裡有一項未解析的效果。`);
+          }
         }
         hp[tgt] = e.after.hp;
       } else if (e.event_type === 'heal_applied') {

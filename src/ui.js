@@ -149,7 +149,7 @@ function tabResearch() {
 }
 function tabMemory() {
   const g = ui.game;
-  if (!g.memories.length) return '<div class="panel"><h2>記憶簿</h2><p class="muted">還沒有任何記憶。只有規則判定的重大事件（第一次擊殺、第一次連攜、守護瀕死的隊友、擊敗宿敵）會被記住，閒聊與台詞不會。</p></div>';
+  if (!g.memories.length) return '<div class="panel"><h2>記憶簿</h2><p class="muted">還沒有任何記憶。只有規則判定的重大事件（第一次擊殺、第一次連攜、守護瀕死的隊友、首次觀察到未解析的羈絆效果、擊敗宿敵）會被記住，閒聊與台詞不會。</p></div>';
   return `<div class="panel"><h2>記憶簿</h2><p class="small muted">每一筆都能回溯到戰鬥事件。台詞、演出與營火閒聊不會寫進這裡。</p>
     ${g.memories.map((m) => `<div class="moment"><div>${esc(m.text)}</div><div class="small muted">第 ${m.day} 天・戰鬥 ${m.battle_id}・記得的人：${m.witnesses.map((w) => CHARACTERS[w]?.name).join('、')}</div></div>`).join('')}</div>`;
 }

@@ -529,3 +529,30 @@ test('裝備比較與背包排序：屬性差文字正確；排序只回傳顯�
   assert.deepEqual(inventoryOrder(inv, 'slot'), [0, 2, 1, 3]);
   assert.deepEqual(inv, copy);
 });
+
+test('黑盒子首次觀察記憶：有效果才記、只記一次、不揭露效果名稱、引用真實事件、營火談話引用', () => {
+  const play = (lv) => {
+    for (let s = 1; s <= 40; s++) {
+      const st = mk(s, { party: ['ade', 'xiaomei', 'airin'], enemies: ['goblin', 'goblin'], pairLevels: { [pairKey('ade', 'xiaomei')]: lv } });
+      while (!st.done) stepRound(st, st.actors.ade.cooldowns.guard > 0 ? {} : { ade: { skill_id: 'guard', target_id: 'xiaomei' } });
+      const hit = allEvents(st.record).find((e) => e.event_type === 'damage_applied' && e.calculation.hidden_modifier_ids?.length);
+      if (hit) return { rec: st.record, hit };
+      if (lv === 0) { const m = deriveMemories(st.record, { careerKills: {}, existingKeys: new Set(), day: 1 }); assert.equal(m.filter((x) => x.type === 'bond_oddity').length, 0, '熟練度 0 沒有效果就不記'); }
+    }
+    return null;
+  };
+  assert.equal(play(0), null);
+  const { rec, hit } = play(1);
+  const ctx = (keys = []) => ({ careerKills: {}, existingKeys: new Set(keys), day: 1 });
+  const mems = deriveMemories(rec, ctx()).filter((m) => m.type === 'bond_oddity');
+  assert.equal(mems.length, 1, '同一對只記一次');
+  assert.equal(mems[0].key, `bond_oddity:${pairKey('ade', 'xiaomei')}`);
+  assert.deepEqual(mems[0].event_ids, [hit.event_id]);
+  assert.deepEqual(verifyMemories(mems, rec), []);
+  assert.match(mems[0].text, new RegExp(`只受到 ${hit.calculation.raw_damage} 點傷害`));
+  assert.doesNotMatch(mems[0].text, /守護者的信任|防禦 \+/);
+  assert.equal(deriveMemories(rec, ctx([mems[0].key])).filter((m) => m.type === 'bond_oddity').length, 0, '重看戰報不重複');
+  const g = G.newGame(3);
+  g.memories = [mems[0]];
+  assert.match(G.talk(g, { actor_id: 'ade', intent: 'recent' }).text, /感覺不太一樣/);
+});

@@ -42,6 +42,7 @@ const RECENT_BY_MEMORY = {
   guard_save: '「那時候{other}差點就倒了。」{name}沉默了一會兒。「下次不會讓事情走到那一步。」',
   heal_save: '「{other}那時候臉色白得嚇人。」{name}握了握拳。「幸好來得及。」',
   heal_saved: '「那時候要不是{other}……」{name}頓了頓。「欠一次人情。」',
+  bond_oddity: '「替{other}擋那一下……」{name}摸了摸護具。「感覺不太一樣，可我說不上來。」',
   brink: '「那時候只剩一口氣。」{name}低頭看著自己的手。「現在還能站在這裡，已經算賺到。」',
   rival_defeated: '「殘響騎士。」{name}握緊手裡的東西。「他倒下前，好像想說什麼。」',
 };
@@ -88,7 +89,7 @@ export function talkLine(game, id, intent) {
     if (typeof t === 'object') t = t[id];
     const victim = m.type === 'first_kill' ? (m.text.match(/（(.+)）/)?.[1] ?? '') : '';
     const partner = m.type === 'first_chain' ? nm(m.actors.find((a) => a !== id)) : '';
-    const other = ['guard_save', 'heal_save'].includes(m.type) ? nm(m.actors.find((a) => a !== id)) : '';
+    const other = ['guard_save', 'heal_save', 'bond_oddity'].includes(m.type) ? nm(m.actors.find((a) => a !== id)) : '';
     if (t) return { text: fill(t, { name, victim, partner, other }), refs: [m.key] };
   }
   const rep = [...(game.reports || [])].reverse().find((r) => r.record.combatants.some((c) => c.actor_id === id));
