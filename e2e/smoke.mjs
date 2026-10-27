@@ -86,6 +86,7 @@ async function play(page, label) {
   return battles;
 }
 
+const SAVE_KEY_E2E = 'fallen-gods-save-v1';
 try {
   const desk = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await play(desk, 'desktop');
@@ -107,6 +108,17 @@ try {
   await desk.getByRole('button', { name: '刪除存檔並重來' }).click();
   await desk.getByRole('button', { name: '取消' }).click();
   check(await desk.getByRole('button', { name: '刪除存檔並重來' }).isVisible(), 'desktop 刪除需要頁內二次確認（不用 confirm 對話框）');
+  // 研究確認記憶（battle_id 為 null）：寫進存檔後重新載入，記憶簿顯示「研究室」而不是「戰鬥 null」
+  await desk.evaluate((key) => {
+    const g = JSON.parse(localStorage.getItem(key));
+    g.memories.push({ key: 'bond_confirmed:ade|xiaomei', type: 'bond_confirmed', actors: ['ade', 'xiaomei'], event_ids: [], ref_keys: [], witnesses: ['ade', 'xiaomei'], battle_id: null, day: g.day, text: 'E2E 研究確認記憶' });
+    localStorage.setItem(key, JSON.stringify(g));
+  }, SAVE_KEY_E2E);
+  await desk.reload();
+  await desk.getByRole('button', { name: '繼續' }).click();
+  await desk.getByRole('button', { name: '記憶簿' }).click();
+  check(await desk.getByText(/E2E 研究確認記憶/).isVisible() && await desk.getByText(/研究室・記得的人/).isVisible(), 'desktop 記憶簿顯示研究確認記憶（無戰鬥編號）');
+  check(!(await desk.getByText(/戰鬥 null/).count()), 'desktop 記憶簿沒有「戰鬥 null」');
   await desk.reload();
   await desk.getByRole('button', { name: '繼續' }).click();
   check(await desk.getByText(/第 2 天/).isVisible(), 'desktop 重新整理後自動存檔可繼續');

@@ -411,7 +411,22 @@ export function runExperiment(game, ward, trials = 6) {
   if (ward !== 'xiaomei' && intercepts > 0 && !anomaly) d.test_control = true;
   let confirmedNow = false;
   if (d.test_with && d.test_control && d.status !== 'confirmed') { d.status = 'confirmed'; confirmedNow = true; game.log.push(`研究確認：【${BONDS.guardian_trust.name}】`); }
-  return { ward, trials, intercepts, baseDef, avgDef: Math.round(avgDef * 10) / 10, anomaly, unexplained: anomaly ? Math.round((avgDef - baseDef) * 10) / 10 : 0, confirmedNow, pairLevel: pairLevel(pairXp(game, 'ade', ward)) };
+  const result = { ward, trials, intercepts, baseDef, avgDef: Math.round(avgDef * 10) / 10, anomaly, unexplained: anomaly ? Math.round((avgDef - baseDef) * 10) / 10 : 0, confirmedNow, pairLevel: pairLevel(pairXp(game, 'ade', ward)) };
+  if (confirmedNow) recordBondConfirmed(game, result);
+  return result;
+}
+
+/** 研究確認後的記憶：實驗戰鬥不存檔，所以不引用 event_id；改引用前一筆 bond_oddity 記憶與實驗回傳值。確認前不會寫入，名稱與數字只在確認後出現。 */
+function recordBondConfirmed(game, r) {
+  const pair = pairKey('ade', 'xiaomei');
+  const key = `bond_confirmed:${pair}`;
+  if (game.memories.some((m) => m.key === key)) return;
+  const odd = game.memories.find((m) => m.key === `bond_oddity:${pair}`);
+  game.memories.push({
+    key, type: 'bond_confirmed', actors: ['ade', 'xiaomei'], event_ids: [], ref_keys: odd ? [odd.key] : [],
+    witnesses: ['ade', 'xiaomei'], battle_id: null, day: game.day,
+    text: `研究室的對照實驗確認了阿德與小梅之間的【${BONDS.guardian_trust.name}】。最後一次實驗（阿德守護${CHARACTERS[r.ward].name}）：${r.trials} 場試驗中阿德代為承受 ${r.intercepts} 次攻擊，面板防禦 ${r.baseDef}，實際平均防禦 ${r.avgDef}。`,
+  });
 }
 
 // ── 存讀檔 ──────────────────────────────────────────

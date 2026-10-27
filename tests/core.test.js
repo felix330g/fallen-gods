@@ -6,6 +6,7 @@ import { deriveMemories, verifyMemories } from '../src/memory.js';
 import { buildMoments, verifyMoments } from '../src/narration.js';
 import { CHARACTERS, ENEMIES, ENCOUNTER_EVENTS } from '../src/data.js';
 import * as G from '../src/game.js';
+import { lootStats } from '../scripts/lootstats.mjs';
 
 const mk = (seed, opts = {}) => createBattle({
   battleId: 't' + seed, seed, pairLevels: opts.pairLevels || {},
@@ -163,14 +164,15 @@ test('羈絆：換第三人不影響既有搭檔的熟練度', () => {
 test('訓練場：對照實驗確認隱藏羈絆，且不給經驗／熟練度／記憶', () => {
   const g = G.newGame(1);
   g.pairs[pairKey('ade', 'xiaomei')] = { xp: 30 };
-  const before = JSON.stringify({ r: g.roster, p: g.pairs, m: g.memories });
+  const before = JSON.stringify({ r: g.roster, p: g.pairs });
   const ctl = G.runExperiment(g, 'airin');
   assert.equal(ctl.anomaly, false);
   assert.equal(g.discoveries.guardian_trust.status, 'undiscovered');
   const res = G.runExperiment(g, 'xiaomei');
   assert.ok(res.anomaly && res.unexplained === 3);
   assert.equal(g.discoveries.guardian_trust.status, 'confirmed');
-  assert.equal(JSON.stringify({ r: g.roster, p: g.pairs, m: g.memories }), before);
+  assert.equal(JSON.stringify({ r: g.roster, p: g.pairs }), before);
+  assert.equal(g.memories.filter((m) => m.type !== 'bond_confirmed').length, 0, '實驗不寫戰鬥記憶');
   const g2 = G.newGame(1);
   G.runExperiment(g2, 'airin'); G.runExperiment(g2, 'xiaomei');
   assert.notEqual(g2.discoveries.guardian_trust.status, 'confirmed', '熟練度不足時沒有差異，不能確認');
@@ -555,4 +557,50 @@ test('黑盒子首次觀察記憶：有效果才記、只記一次、不揭露�
   const g = G.newGame(3);
   g.memories = [mems[0]];
   assert.match(G.talk(g, { actor_id: 'ade', intent: 'recent' }).text, /感覺不太一樣/);
+});
+
+test('研究確認記憶：確認前不寫、確認當次寫一筆、不重複、數字取自回傳值、可引用 bond_oddity、營火引用', () => {
+  const g = G.newGame(1);
+  g.pairs[pairKey('ade', 'xiaomei')] = { xp: 30 };
+  const ctl = G.runExperiment(g, 'airin');
+  G.runExperiment(g, 'airin');
+  assert.equal(g.memories.length, 0, '尚未確認不寫');
+  const odd = { key: `bond_oddity:${pairKey('ade', 'xiaomei')}`, type: 'bond_oddity', actors: ['ade', 'xiaomei'], event_ids: ['x'], witnesses: ['ade'], battle_id: 'b', day: 1, text: '戰報裡有一項未解析的效果。' };
+  assert.doesNotMatch(odd.text, /守護者的信任/);
+  g.memories.push(odd);
+  const res = G.runExperiment(g, 'xiaomei');
+  assert.ok(res.confirmedNow);
+  const m = g.memories.filter((x) => x.type === 'bond_confirmed');
+  assert.equal(m.length, 1);
+  assert.equal(m[0].key, `bond_confirmed:${pairKey('ade', 'xiaomei')}`);
+  assert.deepEqual(m[0].ref_keys, [odd.key]);
+  assert.deepEqual(m[0].event_ids, []);
+  for (const n of [res.trials, res.intercepts, res.baseDef, res.avgDef]) assert.ok(m[0].text.includes(String(n)));
+  assert.match(m[0].text, /守護者的信任/);
+  G.runExperiment(g, 'xiaomei'); G.runExperiment(g, 'airin');
+  assert.equal(g.memories.filter((x) => x.type === 'bond_confirmed').length, 1, '再跑實驗不重複');
+  assert.match(G.talk(g, { actor_id: 'ade', intent: 'recent' }).text, /原來那股力量是真的/);
+  g.day += 1;
+  assert.match(G.talk(g, { actor_id: 'xiaomei', intent: 'recent' }).text, /阿德先生的盾/);
+  assert.ok(G.deserialize(G.serialize(g)).memories.length === 2, '存檔可讀');
+  // 沒有 bond_oddity 時也能寫入
+  const g2 = G.newGame(1);
+  g2.pairs[pairKey('ade', 'xiaomei')] = { xp: 30 };
+  G.runExperiment(g2, 'airin'); G.runExperiment(g2, 'xiaomei');
+  assert.deepEqual(g2.memories[0].ref_keys, []);
+});
+
+test('詞綴掉落統計：計數與比例', () => {
+  const r = lootStats([
+    { group: 'A', loot: ['rusty_blade~keen', 'leather_vest~fireproof~sturdy', 'leather_vest'] },
+    { group: 'A', loot: [] },
+    { group: 'B', loot: ['leather_vest~vital'] },
+  ]);
+  assert.equal(r.A.expeditions, 2);
+  assert.equal(r.A.avgItems, 1.5);
+  assert.equal(r.A.affixedRate, 67);
+  assert.deepEqual(r.A.affixCounts, { keen: 1, fireproof: 1, sturdy: 1 });
+  assert.equal(r.A.fireproofRate, 50);
+  assert.equal(r.B.fireproofRate, 0);
+  assert.equal(r.B.affixedRate, 100);
 });
