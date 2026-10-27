@@ -18,6 +18,7 @@
 - **任務單 2026-10-27：T0 通過（v0.6.1、有 bond_oddity）。**
 - **T1 研究確認記憶：完成。** `runExperiment` 讓 `guardian_trust` 轉為 confirmed 時寫 `bond_confirmed:ade|xiaomei`（每存檔一次）；實驗戰鬥不存檔，故 `event_ids` 為空，改以 `ref_keys` 引用 `bond_oddity` 記憶（沒有時為空陣列）；文字中的試驗數、攔截次數、面板防禦、平均防禦全取自回傳值（文字記的是「最後一次實驗」，確認可能發生在對照組或實驗組那次，守護對象照實寫出）。確認前不寫任何記憶，羈絆名稱只在確認後出現。營火有阿德／小梅各一句。記憶簿對無戰鬥編號的記憶顯示「研究室」。測試涵蓋任務單所有驗收項；E2E 加記憶簿顯示檢查（47 項）。副作用：舊測試「實驗不寫記憶」改為「不寫戰鬥記憶」。
 - **T2 詞綴掉落統計：完成。** `scripts/lootstats.mjs` 純函式 + 單元測試；`npm run balance` 多印一張表。「取得」＝遠征期間拾獲（含全滅而遺失者）。攻略率與 v0.6.1 完全相同（71/63/74/87/94、餘燼 79%）。
+- CI 修復：GitHub 的 ubuntu-latest 升到 26.04，Playwright 1.56 不支援（`playwright install` 失敗），test job 改固定 ubuntu-24.04（deploy job 維持 latest）。
 - 本機環境備註：Chromium 路徑為 /opt/pw-browsers/chromium-1243/chrome-linux64/chrome。
 
 ### v0.6.1（2026-10-26）
