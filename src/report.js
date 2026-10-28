@@ -2,7 +2,8 @@
 import { SKILLS, STATUSES, BONDS, AFFIXES } from './data.js';
 
 const nameOf = (rec, id) => rec.combatants.find((c) => c.actor_id === id)?.name ?? id;
-const skillName = (id) => SKILLS[id]?.name ?? STATUSES[id]?.name ?? (id === 'chain_followup' ? '連攜追擊' : id);
+export const skillLabel = (id) => SKILLS[id]?.name ?? STATUSES[id]?.name ?? (id === 'chain_followup' ? '連攜追擊' : id);
+const skillName = skillLabel;
 export const allEvents = (rec) => rec.turns.flatMap((t) => t.events);
 
 /** 統計：每個數字都附上來源 event_id，方便點回詳細戰報 */
@@ -11,14 +12,14 @@ export function computeStats(rec) {
   for (const c of rec.combatants) {
     s[c.actor_id] = { actor_id: c.actor_id, name: c.name, team: c.team,
       damage: 0, damage_src: [], shield_damage: 0, overkill: 0, taken: 0, taken_src: [], healing: 0, overheal: 0, heal_src: [],
-      kills: 0, kill_src: [], actions: 0, hits: 0, misses: 0, crits: 0, chain_opps: 0, chain_success: 0, chain_src: [], intercepts: 0, by_skill: {} };
+      kills: 0, kill_src: [], actions: 0, skill_uses: {}, skill_src: {}, hits: 0, misses: 0, crits: 0, chain_opps: 0, chain_success: 0, chain_src: [], intercepts: 0, by_skill: {} };
   }
   const evs = allEvents(rec);
   const byId = Object.fromEntries(evs.map((e) => [e.event_id, e]));
   for (const e of evs) {
     const a = e.actor_id && s[e.actor_id];
     switch (e.event_type) {
-      case 'action_declared': a.actions++; break;
+      case 'action_declared': a.actions++; a.skill_uses[e.skill_id] = (a.skill_uses[e.skill_id] || 0) + 1; (a.skill_src[e.skill_id] ||= []).push(e.event_id); break;
       case 'hit_check': if (e.calculation.success) a.hits++; else a.misses++; break;
       case 'critical_check': if (e.calculation.success) a.crits++; break;
       case 'damage_applied': {
@@ -162,4 +163,37 @@ export function detailedLog(rec, discoveries = {}) {
     }
     return { event_id: e.event_id, turn: e.turn_number, type: TYPE_ZH[e.event_type] || e.event_type, raw_type: e.event_type, actor_id: e.actor_id, skill_id: e.skill_id, text: d };
   });
+}
+
+const eventStatus = (e) => (['status_applied', 'status_expired', 'status_removed'].includes(e.event_type) ? e.after?.status_id : (e.event_type === 'damage_applied' && e.calculation?.dot ? e.skill_id : null));
+
+/** 詳細戰報篩選：條件 AND，空值＝不限。actor 比對行動者或目標 */
+export function filterDetailedLog(lines, rec, { actor = '', skill = '', type = '', status = '', turn = '' } = {}) {
+  const byId = Object.fromEntries(allEvents(rec).map((e) => [e.event_id, e]));
+  return lines.filter((l) => {
+    const e = byId[l.event_id];
+    if (actor && l.actor_id !== actor && !e.target_ids.includes(actor)) return false;
+    if (skill && l.skill_id !== skill) return false;
+    if (type && l.raw_type !== type) return false;
+    if (turn !== '' && turn != null && l.turn !== Number(turn)) return false;
+    if (status && eventStatus(e) !== status) return false;
+    return true;
+  });
+}
+
+/** 篩選選項：只列本場紀錄實際出現的值 */
+export function filterOptions(lines, rec) {
+  const byId = Object.fromEntries(allEvents(rec).map((e) => [e.event_id, e]));
+  const skills = new Set(), types = new Set(), statuses = new Set(), turns = new Set();
+  for (const l of lines) {
+    if (l.skill_id) skills.add(l.skill_id);
+    types.add(l.raw_type); turns.add(l.turn);
+    const st = eventStatus(byId[l.event_id]); if (st) statuses.add(st);
+  }
+  return {
+    skills: [...skills].map((id) => ({ id, name: skillName(id) })),
+    types: [...types].map((id) => ({ id, name: TYPE_ZH[id] || id })),
+    statuses: [...statuses].map((id) => ({ id, name: STATUSES[id]?.name ?? id })),
+    turns: [...turns].sort((a, b) => a - b).map((n) => ({ id: String(n), name: `第 ${n} 回合` })),
+  };
 }

@@ -2,11 +2,11 @@
 import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef, statDiffText, inventoryOrder } from './data.js';
 import { stepRound, chooseAction, currentSkills, pairKey, pairLevel } from './engine.js';
 import * as G from './game.js';
-import { summary, simpleLog, detailedLog, computeStats, hpCurve } from './report.js';
+import { summary, simpleLog, detailedLog, filterDetailedLog, filterOptions, computeStats, hpCurve, skillLabel } from './report.js';
 import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX } from './talk.js';
 
 const SAVE_KEY = 'fallen-gods-save-v1';
-const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null };
+const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null };
 const root = () => document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TACTIC = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
@@ -275,17 +275,19 @@ function repLog(rep, rec) {
   const disc = g().discoveries;
   const actors = rec.combatants;
   const filterSel = `<select data-change="actorFilter"><option value="">全部角色</option>${actors.map((c) => `<option value="${c.actor_id}" ${ui.actorFilter === c.actor_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>`;
-  let lines;
+  let lines, opts = null;
   if (ui.detailed) {
     lines = detailedLog(rec, disc);
     if (ui.idFilter) lines = lines.filter((l) => ui.idFilter.includes(l.event_id));
-    else if (ui.actorFilter) lines = lines.filter((l) => l.actor_id === ui.actorFilter || rec.turns.flatMap((t) => t.events).find((e) => e.event_id === l.event_id)?.target_ids.includes(ui.actorFilter));
+    else { opts = filterOptions(lines, rec); lines = filterDetailedLog(lines, rec, { actor: ui.actorFilter, ...ui.lf }); }
   } else {
     lines = simpleLog(rec, disc);
     if (ui.actorFilter) { const n = actors.find((c) => c.actor_id === ui.actorFilter).name; lines = lines.filter((l) => l.text.includes(n)); }
   }
   const banner = ui.idFilter ? `<div class="notice">只顯示 ${ui.idFilter.length} 個來源事件 <button class="link" data-act="clearIdFilter">顯示全部</button></div>` : '';
-  return `<div class="panel"><div class="row" style="margin-bottom:8px"><button data-act="toggleDetail">${ui.detailed ? '切換到簡易' : '切換到詳細'}</button>${filterSel}</div>${banner}
+  const lsel = (key, label, list) => `<select data-change="logFilter" data-arg="${key}" aria-label="${label}"><option value="">${label}</option>${list.map((o) => `<option value="${esc(o.id)}" ${ui.lf[key] === o.id ? 'selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`;
+  const extra = opts && !ui.idFilter ? `${lsel('skill', '全部技能', opts.skills)}${lsel('type', '全部事件類型', opts.types)}${lsel('status', '全部狀態', opts.statuses)}${lsel('turn', '全部回合', opts.turns)}<button class="link" data-act="clearFilters">清除篩選</button>` : '';
+  return `<div class="panel"><div class="row" style="margin-bottom:8px"><button data-act="toggleDetail">${ui.detailed ? '切換到簡易' : '切換到詳細'}</button>${filterSel}${extra}</div>${banner}
     <div class="log" style="max-height:560px">${lines.map((l) => `<div class="ln ${ui.hl === l.event_id ? 'hl' : ''}" id="ev-${esc(l.event_id.replace(':', '-'))}"><span class="t">R${l.turn}${ui.detailed ? '・' + esc(l.type) : ''}</span>${esc(l.text)}</div>`).join('') || '<div class="ln muted">沒有符合的事件</div>'}</div></div>`;
 }
 function srcBtn(n, ids) { return ids.length ? `<button class="link" data-act="src" data-arg="${ids.join(',')}">${n}</button>` : String(n); }
@@ -293,6 +295,7 @@ function repStats(rep, rec) {
   const st = computeStats(rec);
   const rows = Object.values(st).map((s) => `<tr><td>${esc(s.name)}</td><td>${srcBtn(s.damage, s.damage_src)}</td><td>${s.shield_damage}</td><td>${s.overkill}</td><td>${srcBtn(s.taken, s.taken_src)}</td><td>${srcBtn(s.healing, s.heal_src)}</td><td>${srcBtn(s.kills, s.kill_src)}</td>
     <td>${s.hits + s.misses ? Math.round((s.hits * 100) / (s.hits + s.misses)) + '%' : '—'}</td><td>${s.crits}</td><td>${s.chain_opps ? `${srcBtn(s.chain_success, s.chain_src)}/${s.chain_opps}` : '—'}</td></tr>`).join('');
+  const skillRows = Object.values(st).flatMap((s) => [...new Set([...Object.keys(s.skill_uses), ...Object.keys(s.by_skill)])].map((k) => `<tr data-skillrow><td>${esc(s.name)}</td><td style="text-align:left">${esc(skillLabel(k))}</td><td>${srcBtn(s.skill_uses[k] || 0, s.skill_src[k] || [])}</td><td>${s.by_skill[k] || 0}</td></tr>`)).join('');
   const curve = hpCurve(rec);
   const W = 640, H = 200, P = 28;
   const n = rec.turns.length;
@@ -304,6 +307,8 @@ function repStats(rep, rec) {
   const legend = rec.combatants.map((c, i) => `<span><i style="background:${SERIES[i % SERIES.length]}"></i>${esc(c.name)}</span>`).join('');
   return `<div class="panel"><h3>統計</h3><p class="small muted">點擊數字可以看到構成它的每一個事件。連攜欄的分母是「符合觸發資格的機會」。</p>
     <div class="tablewrap"><table><tr><th>角色</th><th>有效傷害</th><th>打護盾</th><th>超殺</th><th>承傷</th><th>有效治療</th><th>擊倒</th><th>命中</th><th>暴擊</th><th>連攜</th></tr>${rows}</table></div></div>
+    <div class="panel"><h3>技能使用</h3><p class="small muted">次數以宣告行動計（無效指令不算）；傷害為有效傷害，含持續傷害與連攜追擊。</p>
+    <div class="tablewrap"><table id="skillTable"><tr><th>角色</th><th style="text-align:left">技能</th><th>次數</th><th>傷害</th></tr>${skillRows}</table></div></div>
     <div class="panel"><h3>HP 曲線（每回合結束）</h3><svg viewBox="0 0 ${W} ${H}" width="100%" role="img" aria-label="HP 曲線">${axis}${paths}</svg><div class="legend">${legend}</div></div>`;
 }
 function repMoments(rep) {
@@ -370,13 +375,14 @@ function act(name, arg) {
     case 'afterReport': if (game.expedition) routeFromGame(); else { ui.view = 'camp'; ui.tab = 'camp'; } break;
     case 'rtab': ui.rtab = arg; ui.hl = null; break;
     case 'toggleDetail': ui.detailed = !ui.detailed; ui.idFilter = null; break;
-    case 'jump': ui.rtab = 'log'; ui.detailed = true; ui.idFilter = null; ui.actorFilter = ''; ui.hl = arg; break;
+    case 'jump': ui.rtab = 'log'; ui.detailed = true; ui.idFilter = null; ui.actorFilter = ''; ui.lf = { skill: '', type: '', status: '', turn: '' }; ui.hl = arg; break;
     case 'src': ui.rtab = 'log'; ui.detailed = true; ui.idFilter = arg.split(','); ui.hl = null; break;
     case 'clearIdFilter': ui.idFilter = null; break;
+    case 'clearFilters': ui.actorFilter = ''; ui.lf = { skill: '', type: '', status: '', turn: '' }; break;
     default: break;
   }
 }
-function resetLogView() { ui.detailed = false; ui.idFilter = null; ui.actorFilter = ''; ui.hl = null; }
+function resetLogView() { ui.detailed = false; ui.idFilter = null; ui.actorFilter = ''; ui.lf = { skill: '', type: '', status: '', turn: '' }; ui.hl = null; }
 
 function change(name, arg, value) {
   const game = ui.game;
@@ -391,6 +397,7 @@ function change(name, arg, value) {
     case 'cmdSkill': ui.cmds[arg] = { skill_id: value, target_id: ui.cmds[arg]?.target_id }; break;
     case 'cmdTarget': ui.cmds[arg].target_id = value; break;
     case 'actorFilter': ui.actorFilter = value; ui.idFilter = null; break;
+    case 'logFilter': ui.lf[arg] = value; ui.idFilter = null; break;
     default: break;
   }
 }

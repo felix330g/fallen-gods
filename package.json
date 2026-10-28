@@ -1,6 +1,6 @@
 {
   "name": "fallen-gods",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "private": true,
   "description": "眾神殞落：AI 文字冒險 RPG 垂直切片（灰燼地窖）",
   "type": "module",

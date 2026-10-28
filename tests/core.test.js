@@ -604,3 +604,54 @@ test('詞綴掉落統計：計數與比例', () => {
   assert.equal(r.B.fireproofRate, 0);
   assert.equal(r.B.affixedRate, 100);
 });
+
+import { filterDetailedLog, filterOptions } from '../src/report.js';
+
+test('詳細戰報篩選：各條件等於直接掃描、AND、空條件全回、DOT 可由狀態選到、選項只含出現過的值', () => {
+  let sawDot = false;
+  for (let s = 1; s <= 30; s++) {
+    const rec = runAuto(mk(s));
+    const lines = detailedLog(rec);
+    const evs = allEvents(rec).filter((e) => e.event_type !== 'turn_start' && e.event_type !== 'turn_end');
+    const ids = (arr) => arr.map((x) => x.event_id).join();
+    assert.equal(filterDetailedLog(lines, rec, {}).length, lines.length);
+    assert.equal(filterDetailedLog(lines, rec, { skill: '', turn: '' }).length, lines.length);
+    const opts = filterOptions(lines, rec);
+    assert.ok(opts.skills.every((o) => evs.some((e) => e.skill_id === o.id)));
+    assert.ok(opts.types.every((o) => evs.some((e) => e.event_type === o.id)));
+    assert.ok(opts.turns.every((o) => evs.some((e) => e.turn_number === +o.id)));
+    for (const o of opts.skills) assert.equal(ids(filterDetailedLog(lines, rec, { skill: o.id })), ids(evs.filter((e) => e.skill_id === o.id)));
+    for (const o of opts.types) assert.equal(ids(filterDetailedLog(lines, rec, { type: o.id })), ids(evs.filter((e) => e.event_type === o.id)));
+    for (const o of opts.turns) assert.equal(ids(filterDetailedLog(lines, rec, { turn: o.id })), ids(evs.filter((e) => e.turn_number === +o.id)));
+    for (const c of rec.combatants) assert.equal(ids(filterDetailedLog(lines, rec, { actor: c.actor_id })), ids(evs.filter((e) => e.actor_id === c.actor_id || e.target_ids.includes(c.actor_id))));
+    const stOf = (e) => (['status_applied', 'status_expired', 'status_removed'].includes(e.event_type) ? e.after.status_id : e.event_type === 'damage_applied' && e.calculation.dot ? e.skill_id : null);
+    for (const o of opts.statuses) {
+      const got = filterDetailedLog(lines, rec, { status: o.id });
+      assert.equal(ids(got), ids(evs.filter((e) => stOf(e) === o.id)));
+      if (got.some((l) => l.raw_type === 'damage_applied')) sawDot = true;
+    }
+    assert.equal(ids(filterDetailedLog(lines, rec, { type: 'damage_applied', turn: 1 })), ids(evs.filter((e) => e.event_type === 'damage_applied' && e.turn_number === 1)));
+    assert.equal(filterDetailedLog(lines, rec, { skill: 'no_such' }).length, 0);
+  }
+  assert.ok(sawDot, '至少一場出現持續傷害並被狀態篩選選到');
+});
+
+test('統計：技能使用次數＝有效宣告行動數，傷害分技能加總＝總傷害，來源事件存在', () => {
+  for (let s = 1; s <= 20; s++) {
+    const rec = runAuto(mk(s));
+    const st = computeStats(rec);
+    const evs = allEvents(rec);
+    const idSet = new Set(evs.map((e) => e.event_id));
+    for (const c of rec.combatants) {
+      const x = st[c.actor_id];
+      const declared = evs.filter((e) => e.event_type === 'action_declared' && e.actor_id === c.actor_id).length;
+      assert.equal(Object.values(x.skill_uses).reduce((a, b) => a + b, 0), declared);
+      assert.equal(x.actions, declared);
+      assert.equal(Object.values(x.by_skill).reduce((a, b) => a + b, 0), x.damage);
+      for (const [k, ids] of Object.entries(x.skill_src)) {
+        assert.equal(ids.length, x.skill_uses[k]);
+        assert.ok(ids.every((id) => idSet.has(id)));
+      }
+    }
+  }
+});
