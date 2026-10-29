@@ -88,6 +88,7 @@ async function play(page, label) {
         await page.locator('table button.link').first().click();
         check(await page.getByText(/只顯示 \d+ 個來源事件/).isVisible(), `${label} 統計數字可點回來源事件`);
         await page.getByRole('button', { name: '隊伍演出' }).click();
+        check(await page.locator('#aiPanel').count() === 0, `${label} 一般網頁不顯示 AI 演出（只在 claude.ai 託管頁出現）`);
       }
       await page.getByRole('button', { name: /繼續探索|返回營地/ }).click();
       continue;

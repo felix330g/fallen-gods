@@ -4,9 +4,10 @@ import { stepRound, chooseAction, currentSkills, pairKey, pairLevel } from './en
 import * as G from './game.js';
 import { summary, simpleLog, detailedLog, filterDetailedLog, filterOptions, computeStats, hpCurve, skillLabel } from './report.js';
 import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX } from './talk.js';
+import { buildPrompt, validateAI, aiEligible } from './ai.js';
 
 const SAVE_KEY = 'fallen-gods-save-v1';
-const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null };
+const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null, sample: null, ai: {}, aiCtl: null };
 const root = () => document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TACTIC = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
@@ -313,8 +314,41 @@ function repStats(rep, rec) {
 }
 function repMoments(rep) {
   if (!rep.moments.length) return '<div class="panel"><p class="muted">這場沒有演出。</p></div>';
-  return `<div class="panel"><p class="small muted">演出只引用真實發生的事件，不影響任何數值，也不寫入記憶。</p>
-    ${rep.moments.map((m) => `<div class="moment ${m.author ? 'author' : ''}">${esc(m.text)}<div class="small"><button class="link" data-act="jump" data-arg="${m.event_ids[0]}">對應事件</button>${m.author ? ' <span class="chip warn">作者文本</span>' : ''}</div></div>`).join('')}</div>`;
+  const st = ui.ai[ui.reportIdx];
+  const canAI = ui.sample && rep.moments.some(aiEligible);
+  const aiBar = !canAI ? '' : `<div class="panel" id="aiPanel"><div class="row"><b>AI 演出（試驗）</b>
+      ${st?.status === 'loading' ? '<span class="muted">Claude 正在寫……</span><button class="small" data-act="aiStop">停止</button>'
+        : `<button class="small" data-act="aiRewrite">${st?.results ? '重新產生' : '用 AI 改寫這場的演出'}</button>`}</div>
+      <p class="small muted">用你的 Claude 額度改寫下方台詞。AI 只拿到這場真實發生的事件，寫出的內容經驗證才顯示，不影響數值、不寫入記憶、不存檔；沒通過驗證的段落保留模板。作者文本與敵人台詞不交給 AI。</p>
+      ${st?.error ? `<div class="notice err">${esc(st.error)}</div>` : ''}
+      ${st?.prompt ? `<details><summary class="small">看送出的提示詞</summary><pre class="aiprompt">${esc(st.prompt)}</pre></details>` : ''}</div>`;
+  return `${aiBar}<div class="panel"><p class="small muted">演出只引用真實發生的事件，不影響任何數值，也不寫入記憶。</p>
+    ${rep.moments.map((m, i) => {
+      const ai = st?.results?.[i], why = st?.rejected?.[i];
+      const body = ai ? `${ai.lines.map(esc).join('<br>')}<div class="small muted">模板：${esc(m.text)}</div>` : esc(m.text);
+      const chip = m.author ? ' <span class="chip warn">作者文本</span>' : ai ? ' <span class="chip">AI</span>' : why ? ` <span class="chip warn">AI 未通過：${esc(why)}，使用模板</span>` : '';
+      return `<div class="moment ${m.author ? 'author' : ''}">${body}<div class="small"><button class="link" data-act="jump" data-arg="${m.event_ids[0]}">對應事件</button>${chip}</div></div>`;
+    }).join('')}</div>`;
+}
+
+const AI_ERRORS = { not_granted: '你沒有允許這個頁面使用 Claude，AI 演出已關閉。', sampling_disabled: '這個帳號不能使用 Claude。', rate_limited: '呼叫太頻繁或額度用完，請稍後再試。', session_expired: '請重新登入 claude.ai。', refused: 'Claude 拒絕了這次請求，保留模板。', invalid_json: 'AI 回覆格式錯誤，保留模板。可以再試一次。' };
+async function aiRewrite() {
+  const idx = ui.reportIdx, rep = ui.game.reports[idx];
+  const { prompt, items } = buildPrompt(rep.moments, rep.record);
+  ui.aiCtl?.abort();
+  const ctl = ui.aiCtl = new AbortController();
+  ui.ai[idx] = { status: 'loading', prompt };
+  render();
+  try {
+    const out = await ui.sample.json(prompt, { signal: ctl.signal, cache: false });
+    const { ok, rejected } = validateAI(out, items, rep.record);
+    ui.ai[idx] = { status: 'done', prompt, results: ok, rejected };
+  } catch (e) {
+    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    ui.ai[idx] = { status: 'error', prompt, error: e?.code === 'cancelled' ? null : (AI_ERRORS[e?.code] ?? 'AI 暫時無法使用，保留模板。') };
+  }
+  if (ui.aiCtl === ctl) ui.aiCtl = null;
+  render();
 }
 
 // ── 主繪製與事件 ──────────────────────────────────────────
@@ -374,6 +408,8 @@ function act(name, arg) {
     }
     case 'afterReport': if (game.expedition) routeFromGame(); else { ui.view = 'camp'; ui.tab = 'camp'; } break;
     case 'rtab': ui.rtab = arg; ui.hl = null; break;
+    case 'aiRewrite': aiRewrite(); break;
+    case 'aiStop': ui.aiCtl?.abort(); break;
     case 'toggleDetail': ui.detailed = !ui.detailed; ui.idFilter = null; break;
     case 'jump': ui.rtab = 'log'; ui.detailed = true; ui.idFilter = null; ui.actorFilter = ''; ui.lf = { skill: '', type: '', status: '', turn: '' }; ui.hl = arg; break;
     case 'src': ui.rtab = 'log'; ui.detailed = true; ui.idFilter = arg.split(','); ui.hl = null; break;
@@ -447,6 +483,8 @@ export function boot() {
     render();
   });
   render();
+  // claude.ai 託管頁面：可以請 Claude 改寫演出（其他環境沒有 window.claude，功能隱藏）
+  window.claude?.use?.('sample').then((s) => { if (s) { ui.sample = s; render(); } }, () => {});
 }
 
 // 給測試用的唯讀窗口

@@ -655,3 +655,53 @@ test('統計：技能使用次數＝有效宣告行動數，傷害分技能加�
     }
   }
 });
+
+// ── AI 演出（試驗）─────────────────────────────────────
+import { buildPrompt, validateAI, aiEligible, FORBIDDEN } from '../src/ai.js';
+
+const aiCase = () => {
+  const rec = runAuto(mk(7, { enemies: ['goblin', 'slime', 'goblin'] }));
+  const moments = buildMoments(rec, { memories: [], history: [], density: 6 });
+  return { rec, moments, ...buildPrompt(moments, rec) };
+};
+const good = (items) => ({ moments: items.map((it) => ({ index: it.index, lines: ['他握緊了武器。'] })) });
+
+test('AI 演出：提示詞只含可交給 AI 的段落、在場角色與事實，不含數值', () => {
+  const { rec, moments, prompt, items } = aiCase();
+  assert.ok(items.length >= 1);
+  for (const it of items) assert.ok(aiEligible(moments[it.index]));
+  for (const c of rec.combatants.filter((c) => c.team === 'party')) assert.ok(prompt.includes(c.name));
+  const absent = Object.values(CHARACTERS).filter((c) => !rec.combatants.some((x) => x.actor_id === c.id));
+  for (const c of absent) assert.ok(!prompt.includes(`- ${c.name}（`), `不在場的 ${c.name} 不該有角色卡`);
+  assert.ok(!/HP \d|傷害 \d/.test(prompt), '事實包不含數值');
+});
+
+test('AI 演出：作者文本與敵人台詞不交給 AI', () => {
+  assert.equal(aiEligible({ kind: 'rival', author: true }), false);
+  assert.equal(aiEligible({ kind: 'enemy_voice' }), false);
+  assert.equal(aiEligible({ kind: 'first_kill' }), true);
+});
+
+test('AI 演出驗證：合格通過；數字、超長、未公開設定、不在場角色、缺段落都被擋下並回退', () => {
+  const { rec, items } = aiCase();
+  const ok = validateAI(good(items), items, rec);
+  assert.equal(Object.keys(ok.ok).length, items.length);
+  assert.deepEqual(ok.rejected, {});
+  const i0 = items[0].index;
+  const bad = (lines) => validateAI({ moments: [{ index: i0, lines }] }, [items[0]], rec).rejected[i0];
+  assert.equal(bad(['他砍出 999 點傷害。']), '含數字');
+  assert.equal(bad(['啊'.repeat(61)]), '超過字數');
+  assert.equal(bad([`${FORBIDDEN[0]}在發光。`]), '提到未公開設定');
+  const absent = Object.values(CHARACTERS).find((c) => !rec.combatants.some((x) => x.actor_id === c.id));
+  assert.equal(bad([`${absent.name}在遠處看著。`]), '出現不在場的角色');
+  assert.equal(bad(['一', '二', '三']), '格式不符');
+  assert.equal(validateAI({ moments: [] }, items, rec).rejected[i0], '格式不符');
+  assert.equal(validateAI(null, items, rec).rejected[i0], '格式不符');
+});
+
+test('AI 演出驗證：Boss 的正式名稱含「失格者」時不算提到未公開設定', () => {
+  const rec = runAuto(mk(5, { enemies: ['hollow_knight'] }));
+  const items = [{ index: 0 }];
+  const r = validateAI({ moments: [{ index: 0, lines: ['失格者・殘響騎士的劍停在半空。'] }] }, items, rec);
+  assert.ok(r.ok[0], JSON.stringify(r.rejected));
+});
