@@ -29,6 +29,27 @@ const PAST = {
     '「我老家的人很虔誠。神死的那年，他們把最後一點糧食都拿去獻祭了。」洛克聳聳肩。「我拿去換了這把劍。」',
     '「我恨的不是神。」洛克看著火。「是那些到現在還跪著、等別人來救的人。……包括以前的我。」',
   ],
+  // v0.7 可招募夥伴（測試用文本）
+  talli: [
+    '「過去？我只記路，不記事。」塔莉把地圖捲起來。',
+    '「我畫的第一張地圖，是我家那條街。」塔莉笑了笑。「現在那條街在地底下了。」',
+    '「我在找一條路。」塔莉的手指停在地圖的空白處。「一條能回到地面上那條街的路。我知道它不存在。」',
+  ],
+  garn: [
+    '葛恩搖搖頭，繼續磨斧頭。',
+    '「我砍了一輩子的樹。」葛恩說。「神死以後，樹一碰就燒成灰。」',
+    '「有人說地窖最深的地方有一棵不會燒的樹。」葛恩看著火。「我不相信。可是我總得砍點什麼。」',
+  ],
+  sera: [
+    '「病歷是保密的。我的也是。」瑟拉推了推眼鏡。',
+    '「我在很多城市治過傷。」瑟拉清點著藥瓶。「傷口都一樣，人不一樣。」',
+    '「我治不好的第一個病人，是我老師。」瑟拉把繃帶捲得很緊。「他說灰燼會從裡面燒起來。我還在找解藥。」',
+  ],
+  karo: [
+    '卡蘿笑了一聲，沒有回答。',
+    '「這把劍上的火，從我拿到它那天就沒熄過。」卡蘿看著刀刃。「我也不知道它在燒什麼。」',
+    '「我欠一個人一條命。」卡蘿收起笑容。「他把劍交給我的時候，說『往下走』。所以我在往下走。」',
+  ],
 };
 
 const RECENT_BY_MEMORY = {
@@ -37,6 +58,10 @@ const RECENT_BY_MEMORY = {
     ade: '「第一個總是最難的。」阿德說。「之後就只是在數數。」',
     xiaomei: '「我到現在還記得{victim}倒下的聲音。」小梅小聲說。「……是不是不應該習慣？」',
     rook: '「第一筆帳。」洛克拍拍錢袋。「記得很清楚。」',
+    talli: '「{victim}啊。」塔莉在地圖上畫了個叉。「這裡以後安全了。」',
+    garn: '「{victim}。」葛恩點點頭，就這樣。',
+    sera: '「{victim}的傷口我看過了。」瑟拉說。「很乾淨。」',
+    karo: '「第一個？」卡蘿挑眉。「在這裡是第一個。」',
   },
   first_chain: '「那次和{partner}的配合？」{name}難得地笑了。「沒有說好，就是知道。」',
   guard_save: '「那時候{other}差點就倒了。」{name}沉默了一會兒。「下次不會讓事情走到那一步。」',
@@ -56,6 +81,56 @@ const THANKS = {
   ade: '「謝什麼，盾本來就是拿來擋的。」阿德嘴上這麼說，腳步倒是輕快了點。',
   xiaomei: '「欸？是我該謝謝大家才對！」小梅的臉紅到耳根。',
   rook: '「道謝不能當飯吃。」洛克停了一下。「……不過我收下了。」',
+  talli: '「那下次地圖算你便宜一點。」塔莉眨眨眼。',
+  garn: '葛恩低聲嗯了一聲，把一塊烤好的肉推到你面前。',
+  sera: '「不用謝，記得按時換藥。」瑟拉頭也不抬。',
+  karo: '「別急著謝，路還長。」卡蘿笑著揮揮手。',
+};
+
+// 營火對話框（v0.7）：每人兩個寫死的話題，選了之後可以接著追問。只接受白名單 id。
+export const TOPICS = {
+  airin: [
+    { id: 'bow', label: '問問她的弓', reply: '艾琳把弓遞過來讓你看。弓臂上刻著一排細小的記號。', follow: [
+      { id: 'marks', label: '這些記號是什麼？', reply: '「風向。」她說。「每一次射偏，我都記下來。」' },
+      { id: 'leave', label: '把弓還給她', reply: '她接過弓，點了點頭。這大概是謝謝的意思。' }] },
+    { id: 'quiet', label: '一起安靜地坐著', reply: '你們誰也沒說話。過了很久，艾琳把一塊乾糧分成兩半，遞了一半給你。', follow: [] },
+  ],
+  ade: [
+    { id: 'shield', label: '問問盾上的刮痕', reply: '「這道是骨鼠，這道是哥布林。」阿德一道一道指過去。「這道……是我自己摔的。」', follow: [
+      { id: 'fall', label: '怎麼摔的？', reply: '「值夜睡著了。」阿德面不改色。「下一題。」' }] },
+    { id: 'sleep', label: '叫他早點休息', reply: '「你比我媽還囉嗦。」阿德嘴上抱怨，還是把毯子拉了過去。', follow: [] },
+  ],
+  xiaomei: [
+    { id: 'magic', label: '請她示範火焰術', reply: '小梅在掌心點起一小團火，火苗晃了兩下，變成一隻歪歪扭扭的小鳥。', follow: [
+      { id: 'praise', label: '稱讚她', reply: '「真、真的嗎？」小鳥的火焰一下子亮了起來。' },
+      { id: 'tease', label: '說它看起來像雞', reply: '「是鳥啦！」小梅氣鼓鼓地把火捏熄了，耳朵卻是紅的。' }] },
+    { id: 'scared', label: '問她怕不怕', reply: '「怕。」小梅老實地說。「可是大家都在，好像就沒那麼怕了。」', follow: [] },
+  ],
+  rook: [
+    { id: 'coin', label: '問他存了多少錢', reply: '「秘密。」洛克把錢袋往懷裡收了收。「反正不夠。」', follow: [
+      { id: 'enough', label: '多少才夠？', reply: '洛克想了很久。「夠買一塊地。不用跪著求雨的那種。」' }] },
+    { id: 'sword', label: '問他的劍', reply: '「用糧食換的。」洛克說。「所以每一劍都得值回票價。」', follow: [] },
+  ],
+  talli: [
+    { id: 'map', label: '看她的地圖', reply: '塔莉攤開一張畫滿岔路的地圖，有些路被她用紅墨水劃掉了。', follow: [
+      { id: 'red', label: '紅色的是什麼？', reply: '「死路。」塔莉說。「也可能是我還不敢走的路。」' }] },
+    { id: 'price', label: '問地圖怎麼賣', reply: '「對隊友打八折。」塔莉想了想。「對你打七折。」', follow: [] },
+  ],
+  garn: [
+    { id: 'axe', label: '問問他的斧頭', reply: '葛恩把斧頭橫放在膝上，用拇指試了試刃口。「還能用。」', follow: [
+      { id: 'tree', label: '最後砍的是什麼樹？', reply: '「橡樹。」葛恩停了一下。「它倒下之前就燒起來了。」' }] },
+    { id: 'food', label: '誇他烤的肉', reply: '葛恩沒說話，又往你盤子裡放了一塊。', follow: [] },
+  ],
+  sera: [
+    { id: 'herb', label: '問她在調什麼藥', reply: '「止血的。」瑟拉把草葉搗碎。「你們太會受傷了，我得多做一點。」', follow: [
+      { id: 'teach', label: '請她教你', reply: '「先學會不要受傷。」瑟拉說。「這比較難。」' }] },
+    { id: 'rest', label: '請她也休息一下', reply: '瑟拉愣了一下，好像第一次有人這樣說。「……十分鐘。」', follow: [] },
+  ],
+  karo: [
+    { id: 'blade', label: '問劍上的火', reply: '卡蘿把劍舉到你面前。火很安靜，不燙，卻一直在燒。', follow: [
+      { id: 'touch', label: '伸手去碰', reply: '卡蘿把劍收回去。「別。它不認識你。」' }] },
+    { id: 'where', label: '問她從哪裡來', reply: '「上面。」卡蘿指了指地窖的天花板。「大家不都是嗎？」', follow: [] },
+  ],
 };
 
 const fill = (t, v) => t.replace(/\{(\w+)\}/g, (_, k) => v[k] ?? '');
@@ -66,7 +141,8 @@ export function validateTalk(game, input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return 'not_an_object';
   if (Object.keys(input).some((k) => k !== 'actor_id' && k !== 'intent')) return 'unknown_field';
   if (!CHARACTERS[input.actor_id]) return 'unknown_actor';
-  if (!Object.prototype.hasOwnProperty.call(TALK_INTENTS, input.intent)) return 'unknown_intent';
+  if (game.roster && !game.roster[input.actor_id]) return 'unknown_actor';
+  if (!Object.prototype.hasOwnProperty.call(TALK_INTENTS, input.intent) && !(TOPICS[input.actor_id] || []).some((t) => t.id === input.intent)) return 'unknown_intent';
   if (game.expedition) return 'on_expedition';
   if (game.talked?.[input.actor_id] === game.day) return 'already_talked_today';
   return null;
@@ -76,6 +152,8 @@ export function validateTalk(game, input) {
 export function talkLine(game, id, intent) {
   const name = nm(id);
   const aff = game.affinity?.[id] || 0;
+  const topic = (TOPICS[id] || []).find((t) => t.id === intent);
+  if (topic) return { text: topic.reply, refs: [], follow: topic.follow.map(({ id: fid, label }) => ({ id: fid, label })) };
   if (intent === 'past') {
     const tier = PAST_TIERS.filter((t) => aff >= t).length - 1;
     return { text: PAST[id][tier], refs: [], tier, nextAt: PAST_TIERS[tier + 1] ?? null };
@@ -102,4 +180,11 @@ export function talkLine(game, id, intent) {
     return { text: `「上一場（${rep.record.battle_id}）我打出 ${s.damage} 點傷害，承受了 ${s.taken} 點。」${name}想了想。「${s.damage >= s.taken ? '還行。' : '下次得更小心。'}」`, refs: [rep.record.battle_id] };
   }
   return { text: `「我們還沒一起打過仗呢。」${name}說。`, refs: [] };
+}
+
+/** 追問：只回傳寫死的台詞，不改任何狀態（不加好感、不算今天的談話） */
+export function followLine(id, topicId, followId) {
+  const f = (TOPICS[id] || []).find((t) => t.id === topicId)?.follow.find((x) => x.id === followId);
+  if (!f) throw new Error('不能這樣問');
+  return { text: f.reply };
 }

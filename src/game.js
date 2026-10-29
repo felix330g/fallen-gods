@@ -1,5 +1,5 @@
 // 遊戲狀態（純資料＋純函式，無 DOM）。UI 與測試都經由這裡操作。
-import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, RESISTS, SALVAGE_GOLD, itemDef } from './data.js';
+import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, RESISTS, SALVAGE_GOLD, itemDef, STARTERS, LEARNABLE, GACHA, GEMS, SKILLS } from './data.js';
 import { createBattle, stepRound, verifyRecord, pairKey, pairLevel } from './engine.js';
 import { hashSeed, rngInt } from './rng.js';
 import { deriveMemories, verifyMemories } from './memory.js';
@@ -10,11 +10,17 @@ import { validateTalk, talkLine, AFFINITY_MAX } from './talk.js';
 export const SAVE_VERSION = 1;
 const STEPS_PER_FLOOR = 3;
 
+const newMember = () => ({ level: 1, xp: 0, equip: { weapon: null, armor: null }, career_kills: 0, learned: [] });
+/** 已擁有（在名冊裡）的角色，依資料順序 */
+export const ownedIds = (game) => Object.keys(CHARACTERS).filter((id) => game.roster[id]);
+/** 戰鬥用技能：基本技能＋抽到的可學技能 */
+export const battleSkills = (game, id) => [...CHARACTERS[id].skills, ...(game.roster[id]?.learned || [])];
+
 export function newGame(seed = Date.now() % 1e9) {
   const roster = {};
-  for (const id of Object.keys(CHARACTERS)) roster[id] = { level: 1, xp: 0, equip: { weapon: null, armor: null }, career_kills: 0 };
+  for (const id of STARTERS) roster[id] = newMember();
   return {
-    version: SAVE_VERSION, seed: seed >>> 0, day: 1, gold: 60, potions: 2, expeditions: 0, battles_fought: 0, clears: 0,
+    version: SAVE_VERSION, seed: seed >>> 0, day: 1, gold: 60, gems: 0, pulls: 0, pendingRecruit: null, potions: 2, expeditions: 0, battles_fought: 0, clears: 0,
     roster, party: ['airin', 'ade', 'xiaomei'], tactics: { airin: 'balanced', ade: 'balanced', xiaomei: 'balanced', rook: 'balanced' },
     inventory: [], pairs: {}, discoveries: { guardian_trust: { status: 'undiscovered', observations: 0, test_with: false, test_control: false } },
     memories: [], history: [], reports: [], flags: {}, settings: { density: 3, mode: 'auto' },
@@ -60,7 +66,7 @@ export function floorData(game, idx) {
 export function setParty(game, ids) {
   if (game.expedition) throw new Error('遠征中不能換隊');
   const uniq = [...new Set(ids)];
-  if (uniq.length !== PARTY_SIZE || uniq.some((id) => !CHARACTERS[id])) throw new Error(`隊伍需要 ${PARTY_SIZE} 名不同角色`);
+  if (uniq.length !== PARTY_SIZE || uniq.some((id) => !CHARACTERS[id] || !game.roster[id])) throw new Error(`隊伍需要 ${PARTY_SIZE} 名不同角色`);
   game.party = uniq;
 }
 export function setTactic(game, id, tactic) {
@@ -247,6 +253,7 @@ function endExpedition(game, how) {
   } else {
     game.inventory.push(...ex.loot);
     game.gold += ex.gold;
+    game.gems += ex.gems || 0;
     if (how === 'cleared') { game.clears += 1; game.log.push(`${DUNGEON.name} 攻略完成！帶回 ${ex.loot.length} 件物品與 ${ex.gold} 金幣。`); }
     else game.log.push(`隊伍撤退回營地，帶回 ${ex.loot.length} 件物品與 ${ex.gold} 金幣。`);
   }
@@ -261,7 +268,7 @@ export function beginBattle(game) {
   if (!ex?.pending || !['battle', 'boss'].includes(ex.pending.type)) throw new Error('沒有待開始的戰鬥');
   const n = game.battles_fought + 1;
   const combatants = game.party.map((id) => ({
-    actor_id: id, name: CHARACTERS[id].name, team: 'party', stats: effectiveStats(game, id), skills: CHARACTERS[id].skills, tactic: game.tactics[id], hp_start: ex.hp[id],
+    actor_id: id, name: CHARACTERS[id].name, team: 'party', stats: effectiveStats(game, id), skills: battleSkills(game, id), tactic: game.tactics[id], hp_start: ex.hp[id],
     resist_ids: resistIds(game, id),
   }));
   const counts = {};
@@ -345,7 +352,7 @@ export function finishBattle(game, record) {
     if (d.status === 'undiscovered' && d.observations >= 3) { d.status = 'suspected'; game.log.push('研究筆記：阿德守護小梅時，傷害似乎比預期少。'); }
   }
   // 戰利品
-  let gold = 0;
+  let gold = 0, gems = 0;
   const loot = [];
   if (outcome === 'victory') {
     gold = record.combatants.filter((c) => c.team === 'enemy').length * 6;
@@ -360,8 +367,10 @@ export function finishBattle(game, record) {
     } else if (ex.pending.bonusLoot) loot.push(lootRoll(game, 'bonus'));
     ex.gold += gold;
     ex.loot.push(...loot);
+    gems = gemRoll(game, ex.pending.type === 'boss' && game.flags.boss_kills === 1, ex.pending.type === 'boss');
+    ex.gems = (ex.gems || 0) + gems;
   }
-  const report = { record, moments: safeMoments, moment_errors: momErrs, newMemories: newMem.map((m) => m.key), levelUps, pairGain, gold, loot, day: game.day };
+  const report = { record, moments: safeMoments, moment_errors: momErrs, newMemories: newMem.map((m) => m.key), levelUps, pairGain, gold, gems, loot, day: game.day };
   game.reports.push(report);
   game.reports = game.reports.slice(-5);
   if (outcome === 'defeat') endExpedition(game, 'defeat');
@@ -429,6 +438,69 @@ function recordBondConfirmed(game, r) {
   });
 }
 
+// ── 寶石與抽卡（v0.7，數值皆為測試用）──────────────────
+// 寶石掉落用獨立亂數（salt 'gem'），不影響戰鬥與既有掉落結果
+function gemRoll(game, bossFirst, boss) {
+  if (bossFirst) return GEMS.bossFirst;
+  if (boss) return GEMS.bossRepeat;
+  const ex = game.expedition;
+  const r = { rng: hashSeed(game.seed, 'gem', ex.id, ex.floor, ex.step) };
+  return rngInt(r, 100) <= GEMS.battleChance ? 1 : 0;
+}
+
+/** 技能池：只有上陣角色、尚未學會的可學技能 */
+export function skillPool(game) {
+  return game.party.flatMap((id) => (LEARNABLE[id] || []).filter((s) => !game.roster[id].learned.includes(s)).map((skill_id) => ({ actor_id: id, skill_id })));
+}
+
+/**
+ * 抽卡。pool：'recruit'（招募夥伴）或 'skill'（領悟技能）。opts.free：測試模式不扣寶石。
+ * 結果由種子＋抽卡次數決定；招募到新夥伴時先進入 pendingRecruit，看完相遇故事才入隊。
+ */
+export function pull(game, pool, opts = {}) {
+  if (!['recruit', 'skill'].includes(pool)) throw new Error('沒有這個卡池');
+  if (game.expedition) throw new Error('遠征中不能抽卡');
+  if (game.pendingRecruit) throw new Error('先完成和新夥伴的相遇');
+  const cost = GACHA.cost[pool];
+  if (!opts.free && game.gems < cost) throw new Error('寶石不足');
+  const candidates = pool === 'skill' ? skillPool(game) : null;
+  if (pool === 'skill' && !candidates.length) throw new Error('上陣角色沒有可領悟的技能了');
+  const r = { rng: hashSeed(game.seed, 'gacha', game.pulls) };
+  game.pulls += 1;
+  if (!opts.free) game.gems -= cost;
+  if (pool === 'skill') {
+    const pick = candidates[rngInt(r, candidates.length) - 1];
+    game.roster[pick.actor_id].learned.push(pick.skill_id);
+    game.log.push(`${CHARACTERS[pick.actor_id].name}領悟了「${SKILLS[pick.skill_id].name}」。`);
+    return { pool, ...pick };
+  }
+  const roll = rngInt(r, 100);
+  let acc = 0;
+  const rarity = GACHA.rates.find(([, p]) => (acc += p) >= roll)[0];
+  const fresh = Object.values(CHARACTERS).filter((c) => c.recruit && c.rarity === rarity && !game.roster[c.id]);
+  if (!fresh.length) {
+    const refund = GACHA.duplicateRefund;
+    if (!opts.free) game.gems += refund;
+    game.log.push(`招募：${rarity} 的夥伴都已經在隊上了，退回 ${refund} 寶石。`);
+    return { pool, rarity, duplicate: true, refund };
+  }
+  const c = fresh[rngInt(r, fresh.length) - 1];
+  game.pendingRecruit = { id: c.id, rarity };
+  return { pool, rarity, actor_id: c.id };
+}
+
+/** 相遇故事看完後入隊。story 只供重讀（標記是否為 AI），不會成為事實。 */
+export function joinRecruit(game, story) {
+  const p = game.pendingRecruit;
+  if (!p) throw new Error('沒有等待入隊的夥伴');
+  const text = typeof story?.text === 'string' ? story.text.slice(0, 600) : '';
+  game.roster[p.id] = { ...newMember(), meet: { text, ai: !!story?.ai, day: game.day } };
+  game.tactics[p.id] = 'balanced';
+  game.pendingRecruit = null;
+  game.log.push(`${CHARACTERS[p.id].name}（${p.rarity}）加入了隊伍。`);
+  return p.id;
+}
+
 // ── 存讀檔 ──────────────────────────────────────────
 export function serialize(game) { return JSON.stringify(game); }
 
@@ -436,8 +508,17 @@ export function deserialize(text) {
   let g;
   try { g = JSON.parse(text); } catch { throw new Error('存檔不是有效的 JSON'); }
   if (!g || g.version !== SAVE_VERSION || typeof g.seed !== 'number' || !g.roster || !Array.isArray(g.party)) throw new Error('存檔格式不符');
-  for (const id of Object.keys(CHARACTERS)) if (!g.roster[id]) throw new Error('存檔缺少角色資料');
-  if (g.party.some((id) => !CHARACTERS[id])) throw new Error('存檔中有未知角色');
+  for (const id of STARTERS) if (!g.roster[id]) throw new Error('存檔缺少角色資料');
+  if (Object.keys(g.roster).some((id) => !CHARACTERS[id])) throw new Error('存檔中有未知角色');
+  if (g.party.some((id) => !g.roster[id])) throw new Error('存檔中有未知角色');
+  // v0.7 相容：寶石、抽卡、可學技能
+  g.gems ??= 0; g.pulls ??= 0; g.pendingRecruit ??= null;
+  for (const [id, r] of Object.entries(g.roster)) {
+    r.learned ||= [];
+    if (r.learned.some((s) => !(LEARNABLE[id] || []).includes(s))) throw new Error('存檔中有不合法的技能');
+  }
+  if (g.pendingRecruit && (!CHARACTERS[g.pendingRecruit.id]?.recruit || g.roster[g.pendingRecruit.id])) throw new Error('存檔中的招募資料不合法');
+  if (typeof g.gems !== 'number' || g.gems < 0) throw new Error('存檔中的寶石數量不合法');
   for (const r of g.reports || []) if (verifyRecord(r.record).length) throw new Error('存檔中的戰鬥紀錄驗證失敗');
   // v0.3 → v0.4 相容：補上新欄位
   g.affinity ||= {}; g.talked ||= {}; g.flags ||= {};

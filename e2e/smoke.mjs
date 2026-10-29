@@ -35,6 +35,8 @@ async function play(page, label) {
   check(await page.getByRole('button', { name: '出發遠征' }).isVisible(), `${label} 進入營地`);
   check(await page.getByText(`v${VERSION}`).first().isVisible(), `${label} 顯示版本 v${VERSION}`);
   // 營火談話：受限選單，聊完當天鎖住
+  await page.locator('button[data-act="openDlg"][data-arg="ade"]').click();
+  check(await page.locator('#dialogBox').isVisible(), `${label} 營火對話框打開`);
   await page.locator('button[data-act="talk"][data-arg="ade:past"]').click();
   check(await page.locator('#talkResult').isVisible(), `${label} 營火談話有回應`);
   check(await page.locator('button[data-act="talk"][data-arg="ade:recent"]').isDisabled(), `${label} 同一天不能再找同一人聊`);
@@ -117,6 +119,7 @@ try {
   await play(desk, 'desktop');
   // 新的一天可以再聊
   check(!(await desk.locator('button[data-act="talk"][data-arg="ade:recent"]').isDisabled()), 'desktop 隔天可以再聊');
+  await desk.locator('button[data-act="openDlg"][data-arg="xiaomei"]').click();
   await desk.locator('button[data-act="talk"][data-arg="xiaomei:recent"]').click();
   check(await desk.locator('#talkResult').isVisible(), 'desktop 遠征後聊戰鬥');
   // 研究室與訓練場
@@ -182,6 +185,36 @@ try {
   const goldAfter = +(await desk.locator('.stats span').nth(1).innerText()).match(/\d+/)[0];
   check(await desk.getByText(/分解完成/).isVisible() && goldAfter === goldBefore + 35, `desktop 排序後分解需二次確認並得到金幣（${goldBefore}→${goldAfter}）`);
   check((await names()).join('|') === '生鏽短劍', 'desktop 分解後只剩正確的物品');
+  // 招募與營火對話框（v0.7）：匯入有寶石的存檔
+  const rich = JSON.parse(exported); rich.gems = 20; rich.affinity = { ...(rich.affinity || {}), ade: 3 }; rich.talked = {};
+  await desk.getByRole('button', { name: '設定' }).click();
+  await desk.locator('details summary').click();
+  await desk.locator('#pasteSave').fill(JSON.stringify(rich));
+  await desk.getByRole('button', { name: '匯入貼上的存檔' }).click();
+  await desk.getByRole('button', { name: '招募', exact: true }).click();
+  check(await desk.getByText(/寶石 20/).isVisible() || (await desk.locator('.stats').innerText()).includes('寶石 20'), 'desktop 頂欄顯示寶石');
+  await desk.locator('button[data-act="pull"][data-arg="recruit"]').click();
+  check(await desk.locator('#meetPanel').isVisible() && (await desk.locator('#meetPanel .moment').innerText()).length > 20, 'desktop 招募到新夥伴先顯示相遇故事');
+  check((await desk.locator('.stats').innerText()).includes('寶石 15'), 'desktop 招募扣 5 寶石');
+  await desk.locator('button[data-act="join"]').click();
+  await desk.getByRole('button', { name: '隊伍', exact: true }).click();
+  check((await desk.locator('button[data-act="toggleParty"]').count()) === 5, 'desktop 新夥伴出現在隊伍名冊');
+  await desk.locator('details summary', { hasText: '相遇的那天' }).click();
+  check(await desk.getByText(/模板故事（測試用）/).isVisible(), 'desktop 可以重讀相遇故事');
+  await desk.getByRole('button', { name: '招募', exact: true }).click();
+  const poolText = await desk.locator('.unit', { hasText: '領悟技能' }).innerText();
+  check(/艾琳「齊射」/.test(poolText) && !/洛克/.test(poolText), 'desktop 技能池只有上陣角色的技能');
+  await desk.locator('button[data-act="pull"][data-arg="skill"]').click();
+  check(await desk.locator('#gachaResult').getByText(/領悟了/).isVisible() && (await desk.locator('.stats').innerText()).includes('寶石 12'), 'desktop 領悟技能扣 3 寶石');
+  await desk.getByRole('button', { name: '營地', exact: true }).click();
+  await desk.locator('button[data-act="openDlg"][data-arg="xiaomei"]').click();
+  await desk.locator('button[data-act="talk"][data-arg="xiaomei:magic"]').click();
+  check(await desk.locator('#talkResult').getByText(/小鳥/).isVisible(), 'desktop 對話框選項有回應');
+  await desk.locator('button[data-act="follow"][data-arg="xiaomei:magic:tease"]').click();
+  check(await desk.getByText('是鳥啦').isVisible() && await desk.locator('button[data-act="talk"][data-arg="xiaomei:past"]').isDisabled(), 'desktop 追問有回應、當天話題用完');
+  check(await desk.getByText(/好感 3 以後/).isVisible(), 'desktop 好感不足時不開放打字');
+  await desk.locator('button[data-act="openDlg"][data-arg="ade"]').click();
+  check(await desk.getByText(/只在 claude.ai 版本提供/).isVisible() && !(await desk.locator('#chatInput').count()), 'desktop 好感夠但一般網頁沒有 AI 聊天框');
   // 逐回合指揮模式
   await desk.getByRole('button', { name: '設定' }).click();
   await desk.locator('select[data-change="mode"]').selectOption('manual');

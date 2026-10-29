@@ -1,13 +1,13 @@
 // 介面層：只讀寫 game.js 的 API，不直接改數值。
-import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef, statDiffText, inventoryOrder } from './data.js';
+import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef, statDiffText, inventoryOrder, GACHA, LEARNABLE } from './data.js';
 import { stepRound, chooseAction, currentSkills, pairKey, pairLevel } from './engine.js';
 import * as G from './game.js';
 import { summary, simpleLog, detailedLog, filterDetailedLog, filterOptions, computeStats, hpCurve, skillLabel } from './report.js';
-import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX } from './talk.js';
-import { buildPrompt, validateAI, aiEligible } from './ai.js';
+import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX, TOPICS, followLine, talkLine } from './talk.js';
+import { buildPrompt, validateAI, aiEligible, MEET_TEMPLATES, buildMeetPrompt, validateMeet, CHAT_AFFINITY, CHAT_INPUT_MAX, buildChatTurns, validateChat } from './ai.js';
 
 const SAVE_KEY = 'fallen-gods-save-v1';
-const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null, sample: null, ai: {}, aiCtl: null };
+const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null, sample: null, ai: {}, aiCtl: null, testMode: false, gacha: null, meet: null, dlg: null, chatDraft: '' };
 const root = () => document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TACTIC = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
@@ -40,7 +40,7 @@ function hpBar(hp, max, shield = 0) {
 }
 function topbar() {
   const g = ui.game;
-  return `<div class="topbar"><h1>眾神殞落</h1><div class="stats"><span>第 <b>${g.day}</b> 天</span><span>金幣 <b>${g.gold}</b></span><span>藥水 <b>${g.potions}</b></span><span>攻略 <b>${g.clears}</b></span></div></div>`;
+  return `<div class="topbar"><h1>眾神殞落</h1><div class="stats"><span>第 <b>${g.day}</b> 天</span><span>金幣 <b>${g.gold}</b></span><span>寶石 <b>${ui.testMode ? '∞' : g.gems}</b></span><span>藥水 <b>${g.potions}</b></span><span>攻略 <b>${g.clears}</b></span></div></div>`;
 }
 function messages() {
   return (ui.err ? `<div class="notice err">${esc(ui.err)}</div>` : '') + (ui.msg ? `<div class="notice">${esc(ui.msg)}</div>` : '');
@@ -62,22 +62,116 @@ function viewTitle() {
 }
 
 // ── 營地 ──────────────────────────────────────────
-const CAMP_TABS = [['camp', '營地'], ['party', '隊伍'], ['gear', '裝備'], ['research', '研究室'], ['memory', '記憶簿'], ['archive', '戰報檔案'], ['settings', '設定']];
+const CAMP_TABS = [['camp', '營地'], ['party', '隊伍'], ['gacha', '招募'], ['gear', '裝備'], ['research', '研究室'], ['memory', '記憶簿'], ['archive', '戰報檔案'], ['settings', '設定']];
 function viewCamp() {
-  const body = { camp: tabCamp, party: tabParty, gear: tabGear, research: tabResearch, memory: tabMemory, archive: tabArchive, settings: tabSettings }[ui.tab]();
+  const body = { camp: tabCamp, party: tabParty, gacha: tabGacha, gear: tabGear, research: tabResearch, memory: tabMemory, archive: tabArchive, settings: tabSettings }[ui.tab]();
   return `${topbar()}<div class="tabs">${CAMP_TABS.map(([k, n]) => `<button class="${ui.tab === k ? 'on' : ''}" data-act="tab" data-arg="${k}">${n}</button>`).join('')}</div>${messages()}${body}`;
 }
 function campfire() {
   const g = ui.game;
-  const rows = Object.values(CHARACTERS).map((c) => {
-    const aff = g.affinity[c.id] || 0;
-    const done = g.talked[c.id] === g.day;
-    const nextTier = PAST_TIERS.find((t) => t > aff);
-    return `<div class="talkrow"><div><b>${esc(c.name)}</b> <span class="small muted">好感 ${aff}/${AFFINITY_MAX}${nextTier !== undefined ? `・好感 ${nextTier} 時會說更多` : '・已無保留'}</span></div>
-      <div class="row">${Object.entries(TALK_INTENTS).map(([k, n]) => `<button class="small" data-act="talk" data-arg="${c.id}:${k}" ${done ? 'disabled' : ''}>${n}</button>`).join('')}${done ? '<span class="small muted">今天聊過了</span>' : ''}</div></div>`;
+  const rows = G.ownedIds(g).map((id) => {
+    const c = CHARACTERS[id], aff = g.affinity[id] || 0, done = g.talked[id] === g.day;
+    return `<div class="talkrow"><div><b>${esc(c.name)}</b> <span class="small muted">好感 ${aff}/${AFFINITY_MAX}${done ? '・今天聊過了' : ''}</span></div>
+      <button class="small ${ui.dlg?.id === id ? 'primary' : ''}" data-act="openDlg" data-arg="${id}">交談</button></div>`;
   }).join('');
-  const said = ui.talk ? `<div class="moment" id="talkResult"><div>${esc(ui.talk.text)}</div><div class="small muted">${esc(CHARACTERS[ui.talk.actor_id].name)}・${TALK_INTENTS[ui.talk.intent]}・好感 ${ui.talk.affinity}${ui.talk.refs.length ? `・依據：${esc(ui.talk.refs.join('、'))}` : ''}</div></div>` : '';
-  return `<div class="panel"><h3>營火旁</h3><p class="small muted">每人每天可以聊一次。只能從選單選擇話題；他們只會提起真正發生過的事。好感只決定他們願意說多少，不影響戰鬥數值。</p>${said}${rows}</div>`;
+  return `<div class="panel"><h3>營火旁</h3><p class="small muted">選一個人交談。每人每天第一個話題會增加好感；追問不會。他們只會提起真正發生過的事。好感只決定他們願意說多少，不影響戰鬥數值。</p>
+    ${ui.dlg ? dialogBox() : ''}<div class="talklist">${rows}</div></div>`;
+}
+function dialogBox() {
+  const g = ui.game, d = ui.dlg, id = d.id, c = CHARACTERS[id];
+  const aff = g.affinity[id] || 0, done = g.talked[id] === g.day;
+  const nextTier = PAST_TIERS.find((t) => t > aff);
+  const lines = d.lines.map((l, i) => `<div class="dl ${l.who === 'you' ? 'you' : ''} ${l.ai ? 'ai' : ''}" ${i === d.lines.length - 1 && l.who !== 'you' ? 'id="talkResult"' : ''}>${l.who === 'you' ? '<b>你</b>' : `<b>${esc(c.name)}</b>`}<span>${esc(l.text)}</span>${l.ai ? '<span class="chip">AI</span>' : ''}${l.note ? `<span class="small muted">${esc(l.note)}</span>` : ''}</div>`).join('');
+  const opts = [...Object.entries(TALK_INTENTS).map(([k, n]) => [k, n]), ...(TOPICS[id] || []).map((t) => [t.id, t.label])]
+    .map(([k, n]) => `<button class="small" data-act="talk" data-arg="${id}:${k}" ${done ? 'disabled' : ''}>${esc(n)}</button>`).join('');
+  const follows = (d.follow || []).map((f) => `<button class="small" data-act="follow" data-arg="${id}:${d.topic}:${f.id}">${esc(f.label)}</button>`).join('');
+  let chat;
+  if (aff < CHAT_AFFINITY) chat = `<p class="small muted">好感 ${CHAT_AFFINITY} 以後，可以自己打字和${esc(c.name)}聊天。</p>`;
+  else if (!ui.sample) chat = '<p class="small muted">自由聊天由 AI 扮演角色，只在 claude.ai 版本提供。</p>';
+  else chat = `<div class="row chatrow"><input id="chatInput" maxlength="${CHAT_INPUT_MAX}" placeholder="對${esc(c.name)}說……" value="${esc(ui.chatDraft)}" ${d.busy ? 'disabled' : ''}>
+      ${d.busy ? '<button class="small" data-act="chatStop">停止</button>' : '<button class="small primary" data-act="chatSend">說</button>'}</div>
+      <p class="small muted">AI 扮演${esc(c.name)}回話，用你的 Claude 額度。聊天內容不會改變好感、記憶或任何數值，也不會存檔。</p>`;
+  return `<div class="dialog" id="dialogBox"><div class="row"><b>和${esc(c.name)}交談</b><span class="small muted">好感 ${aff}/${AFFINITY_MAX}${nextTier !== undefined ? `・好感 ${nextTier} 時會說更多過去` : ''}</span><button class="link" data-act="closeDlg">離開</button></div>
+    <div class="dlines">${lines || `<div class="dl"><span class="muted">${esc(c.name)}在火邊坐著。</span></div>`}${d.busy ? '<div class="dl"><span class="muted">……</span></div>' : ''}</div>
+    ${follows ? `<div class="row">${follows}</div>` : ''}
+    <div class="row">${opts}</div>${done ? '<p class="small muted">今天的話題已經聊過了，明天再來。</p>' : ''}
+    ${chat}</div>`;
+}
+const CHAT_FALLBACK = (name) => `（${name}看著火，沒有回答。）`;
+async function chatSend() {
+  const g = ui.game, d = ui.dlg, id = d.id, c = CHARACTERS[id];
+  const msg = (document.getElementById('chatInput')?.value || ui.chatDraft || '').trim().slice(0, CHAT_INPUT_MAX);
+  if (!msg || d.busy || !ui.sample) return;
+  ui.chatDraft = '';
+  d.lines.push({ who: 'you', text: msg });
+  d.turns.push({ role: 'user', content: msg });
+  const aff = g.affinity[id] || 0;
+  const knownPast = PAST_TIERS.filter((t) => aff >= t).map((_, i) => talkLine({ ...g, affinity: { [id]: PAST_TIERS[i] } }, id, 'past').text);
+  const memories = g.memories.filter((m) => m.actors.includes(id)).slice(-8).map((m) => m.text);
+  const ctx = { knownPast, memories, partyNames: G.ownedIds(g).filter((x) => x !== id).map((x) => CHARACTERS[x].name) };
+  const ctl = d.ctl = new AbortController();
+  d.busy = true; render();
+  let reply, ai = false, note;
+  try {
+    const { text } = await ui.sample(buildChatTurns(id, ctx, d.turns), { signal: ctl.signal, cache: false, modelTier: 'quick' });
+    const v = validateChat(text, id, [...knownPast, ...memories]);
+    if (v.text) { reply = v.text; ai = true; } else { reply = CHAT_FALLBACK(c.name); note = `AI 回覆未通過：${v.why}`; }
+  } catch (e) {
+    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    reply = CHAT_FALLBACK(c.name); note = e?.code === 'cancelled' ? '已停止' : (AI_ERRORS[e?.code] ?? 'AI 暫時無法使用。');
+  }
+  if (ui.dlg !== d) return;
+  d.busy = false; d.ctl = null;
+  d.lines.push({ who: id, text: reply, ai, note });
+  if (ai) d.turns.push({ role: 'assistant', content: reply }); else d.turns.pop();
+  render();
+  document.getElementById('chatInput')?.focus();
+}
+function tabGacha() {
+  const g = ui.game;
+  if (g.pendingRecruit) return meetPanel();
+  const cost = GACHA.cost, free = ui.testMode;
+  const can = (n) => free || g.gems >= n;
+  const pool = G.skillPool(g);
+  const res = ui.gacha ? `<div class="moment" id="gachaResult">${esc(ui.gacha)}</div>` : '';
+  const fresh = Object.values(CHARACTERS).filter((c) => c.recruit && !g.roster[c.id]);
+  return `<div class="panel"><h2>招募</h2>${free ? '<p class="notice">測試模式：寶石無限，抽卡不扣寶石。</p>' : ''}
+    <p class="small muted">寶石是稀有貨幣：地城裡打贏戰鬥有小機率掉落，第一次擊敗殘響騎士會得到較多。所有角色與機率皆為測試用。</p>${res}
+    <div class="grid">
+      <div class="unit"><div class="name"><b>招募夥伴</b><span class="small muted">${cost.recruit} 寶石</span></div>
+        <p class="small">機率：${GACHA.rates.map(([r, p]) => `${r} ${p}%`).join('・')}。抽到的人會先和你相遇，再加入隊伍。已有的稀有度全員到齊時退回 ${GACHA.duplicateRefund} 寶石。</p>
+        <p class="small muted">尚未遇見：${fresh.map((c) => `${c.name}（${c.rarity}）`).join('、') || '全員到齊'}</p>
+        <button class="primary" data-act="pull" data-arg="recruit" ${can(cost.recruit) ? '' : 'disabled'}>招募一次</button></div>
+      <div class="unit"><div class="name"><b>領悟技能</b><span class="small muted">${cost.skill} 寶石</span></div>
+        <p class="small">只有目前上陣的三人的技能會被抽到。換人出陣，卡池就跟著換。</p>
+        <p class="small muted">${pool.length ? `卡池：${pool.map((p) => `${CHARACTERS[p.actor_id].name}「${SKILLS[p.skill_id].name}」`).join('、')}` : '上陣角色已經學會所有可學技能。'}</p>
+        <button class="primary" data-act="pull" data-arg="skill" ${can(cost.skill) && pool.length ? '' : 'disabled'}>領悟一次</button></div>
+    </div></div>`;
+}
+function meetPanel() {
+  const g = ui.game, p = g.pendingRecruit, c = CHARACTERS[p.id];
+  const m = ui.meet?.id === p.id ? ui.meet : null;
+  const text = m?.story ?? MEET_TEMPLATES[p.id];
+  return `<div class="panel" id="meetPanel"><h2>相遇・${esc(c.name)} <span class="chip rar-${c.rarity}">${c.rarity}</span></h2>
+    <p class="small muted">${esc(c.role)}・${esc(c.bio)}</p>
+    <div class="moment meet">${m?.status === 'loading' ? '<span class="muted">Claude 正在寫你們相遇的那天……</span>' : esc(text)}</div>
+    <p class="small muted">${m?.story ? 'AI 生成的相遇故事：只是一段回憶，不代表正式設定，也不影響任何數值。' : m?.why ? `AI 故事未通過（${esc(m.why)}），改用模板。` : '模板故事（測試用）。'}</p>
+    <div class="row"><button class="primary" data-act="join" ${m?.status === 'loading' ? 'disabled' : ''}>邀請${esc(c.name)}入隊</button>
+    ${ui.sample && m?.status !== 'loading' ? '<button class="small" data-act="meetAI">用 AI 重寫相遇故事</button>' : ''}</div></div>`;
+}
+async function meetAI() {
+  const g = ui.game, id = g.pendingRecruit?.id;
+  if (!id || !ui.sample) return;
+  ui.meet = { id, status: 'loading' }; render();
+  try {
+    const out = await ui.sample.json(buildMeetPrompt(g, id), { cache: false });
+    const v = validateMeet(out, g, id);
+    ui.meet = v.story ? { id, status: 'done', story: v.story } : { id, status: 'done', why: v.why };
+  } catch (e) {
+    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    ui.meet = { id, status: 'done', why: AI_ERRORS[e?.code] ?? 'AI 暫時無法使用' };
+  }
+  render();
 }
 function tabCamp() {
   const g = ui.game;
@@ -92,16 +186,17 @@ function tabCamp() {
 }
 function tabParty() {
   const g = ui.game;
-  const cards = Object.values(CHARACTERS).map((c) => {
+  const cards = G.ownedIds(g).map((id) => CHARACTERS[id]).map((c) => {
     const st = G.effectiveStats(g, c.id), r = g.roster[c.id], inParty = g.party.includes(c.id);
-    return `<div class="unit"><div class="name"><span>${esc(c.name)} <span class="small muted">${c.role}・Lv${r.level}</span></span>
+    return `<div class="unit"><div class="name"><span>${esc(c.name)} ${c.rarity ? `<span class="chip rar-${c.rarity}">${c.rarity}</span>` : ''}<span class="small muted">${c.role}・Lv${r.level}</span></span>
       <button data-act="toggleParty" data-arg="${c.id}" class="${inParty ? 'primary' : ''}">${inParty ? '在隊伍中' : '加入'}</button></div>
       <p class="small muted">${esc(c.bio)}</p>
       <div class="small">命 ${st.hp}・攻 ${st.atk}・防 ${st.def}・速 ${st.spd}・暴 ${st.crit}%　經驗 ${r.xp}/${r.level * 60}</div>
-      <div class="small">${c.skills.map((s) => `<span class="chip" title="${esc(SKILLS[s].desc)}">${SKILLS[s].name}</span>`).join('')}</div>
+      <div class="small">${c.skills.map((s) => `<span class="chip" title="${esc(SKILLS[s].desc)}">${SKILLS[s].name}</span>`).join('')}${r.learned.map((s) => `<span class="chip warn" title="${esc(SKILLS[s].desc)}">領悟・${SKILLS[s].name}</span>`).join('')}</div>
+      ${r.meet?.text ? `<details class="small"><summary>相遇的那天</summary><p>${esc(r.meet.text)}</p><p class="muted">${r.meet.ai ? 'AI 生成的相遇故事，只是回憶，不代表正式設定。' : '模板故事（測試用）。'}</p></details>` : ''}
       <div class="row small" style="margin-top:6px">戰術 <select data-change="tactic" data-arg="${c.id}">${Object.entries(TACTIC).map(([k, n]) => `<option value="${k}" ${g.tactics[c.id] === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div></div>`;
   }).join('');
-  const ids = Object.keys(CHARACTERS);
+  const ids = G.ownedIds(g);
   let pairs = '';
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
     const xp = G.pairXp(g, ids[i], ids[j]);
@@ -114,11 +209,11 @@ function tabParty() {
 }
 function tabGear() {
   const g = ui.game;
-  const rows = Object.values(CHARACTERS).map((c) => {
+  const rows = G.ownedIds(g).map((id) => CHARACTERS[id]).map((c) => {
     const r = g.roster[c.id];
     return `<tr><td>${esc(c.name)}</td>${['weapon', 'armor'].map((s) => `<td style="text-align:left">${r.equip[s] ? `${itemText(r.equip[s])} <button class="link" data-act="unequip" data-arg="${c.id}:${s}">卸下</button>` : '<span class="muted">—</span>'}</td>`).join('')}</tr>`;
   }).join('');
-  const equipOpts = (it) => Object.values(CHARACTERS).map((c) => {
+  const equipOpts = (it) => G.ownedIds(g).map((id) => CHARACTERS[id]).map((c) => {
     const cur = g.roster[c.id].equip[itemDef(it).slot];
     return `<option value="${c.id}">${c.name}（${statDiffText(it, cur)}）</option>`;
   }).join('');
@@ -261,6 +356,7 @@ function repSummary(rep, rec) {
   const rows = s.party.map((p) => `<tr><td>${esc(p.name)}</td><td>${p.damage}</td><td>${p.taken}</td><td>${p.healing}</td><td>${p.kills}</td></tr>`).join('');
   const rewards = [];
   if (rep.gold) rewards.push(`金幣 +${rep.gold}`);
+  if (rep.gems) rewards.push(`寶石 +${rep.gems}`);
   for (const it of rep.loot) rewards.push(itemDef(it).name);
   for (const id of rep.levelUps) rewards.push(`${CHARACTERS[id].name} 升級`);
   for (const [k, v] of Object.entries(rep.pairGain)) if (v) rewards.push(`${k.split('|').map((x) => CHARACTERS[x].name).join('×')} 熟練度 +${v}`);
@@ -365,6 +461,7 @@ function act(name, arg) {
   const game = ui.game;
   ui.err = null; ui.msg = null; ui.confirm = null;
   if (name !== 'talk') ui.talk = null;
+  if (name === 'tab') ui.gacha = null;
   switch (name) {
     case 'new': ui.game = G.newGame(); save(); ui.view = 'camp'; ui.tab = 'camp'; break;
     case 'continue': { const s = loadSaved(); if (!s) { ui.err = '讀取存檔失敗'; break; } ui.game = s; routeFromGame(); break; }
@@ -382,7 +479,40 @@ function act(name, arg) {
     case 'buyPotion': G.buyPotion(game); save(); break;
     case 'salvage': ui.confirm = `salvage:${arg}`; break;
     case 'salvageYes': ui.msg = `分解完成，得到 ${G.salvage(game, +arg)} 金幣`; save(); break;
-    case 'talk': { const [id, intent] = arg.split(':'); ui.talk = G.talk(game, { actor_id: id, intent }); save(); break; }
+    case 'talk': {
+      const [id, intent] = arg.split(':');
+      const r = G.talk(game, { actor_id: id, intent }); save();
+      if (ui.dlg?.id !== id) ui.dlg = { id, lines: [], turns: [], follow: [] };
+      const label = TALK_INTENTS[intent] ?? TOPICS[id].find((t) => t.id === intent).label;
+      ui.dlg.lines.push({ who: 'you', text: label }, { who: id, text: r.text, note: `好感 ${r.affinity}${r.refs.length ? `・依據：${r.refs.join('、')}` : ''}` });
+      ui.dlg.follow = r.follow || []; ui.dlg.topic = intent;
+      break;
+    }
+    case 'follow': {
+      const [id, topic, fid] = arg.split(':');
+      const f = TOPICS[id].find((t) => t.id === topic).follow.find((x) => x.id === fid);
+      ui.dlg.lines.push({ who: 'you', text: f.label }, { who: id, text: followLine(id, topic, fid).text });
+      ui.dlg.follow = ui.dlg.follow.filter((x) => x.id !== fid);
+      break;
+    }
+    case 'openDlg': ui.dlg?.ctl?.abort(); ui.dlg = ui.dlg?.id === arg ? null : { id: arg, lines: [], turns: [], follow: [] }; ui.chatDraft = ''; break;
+    case 'closeDlg': ui.dlg?.ctl?.abort(); ui.dlg = null; ui.chatDraft = ''; break;
+    case 'chatSend': chatSend(); break;
+    case 'chatStop': ui.dlg?.ctl?.abort(); break;
+    case 'pull': {
+      const r = G.pull(game, arg, { free: ui.testMode }); save();
+      ui.gacha = r.pool === 'skill' ? `${CHARACTERS[r.actor_id].name}領悟了「${SKILLS[r.skill_id].name}」！` : r.duplicate ? `抽到 ${r.rarity}，但這個稀有度的夥伴都已經在隊上了。退回 ${r.refund} 寶石。` : null;
+      ui.meet = null;
+      if (r.actor_id && r.pool === 'recruit' && ui.sample) meetAI();
+      break;
+    }
+    case 'meetAI': meetAI(); break;
+    case 'join': {
+      const id = game.pendingRecruit.id, m = ui.meet?.id === id ? ui.meet : null;
+      G.joinRecruit(game, m?.story ? { text: m.story, ai: true } : { text: MEET_TEMPLATES[id], ai: false }); save();
+      ui.gacha = `${CHARACTERS[id].name}加入了隊伍！到「隊伍」分頁可以讓${CHARACTERS[id].name}上陣。`; ui.meet = null;
+      break;
+    }
     case 'unequip': { const [id, slot] = arg.split(':'); G.unequip(game, id, slot); save(); break; }
     case 'experiment': ui.exp = G.runExperiment(game, arg); save(); break;
     case 'openReport': ui.reportIdx = +arg; ui.rtab = 'summary'; ui.fromExpedition = false; ui.view = 'report'; resetLogView(); break;
@@ -482,9 +612,13 @@ export function boot() {
     try { change(s.dataset.change, s.dataset.arg, s.value); } catch (err) { ui.err = err.message; }
     render();
   });
+  // claude.ai 託管頁是測試版：寶石無限
+  ui.testMode = !!window.claude;
   render();
-  // claude.ai 託管頁面：可以請 Claude 改寫演出（其他環境沒有 window.claude，功能隱藏）
+  // claude.ai 託管頁面：可以請 Claude 改寫演出、相遇故事、營火聊天（其他環境沒有 window.claude，功能隱藏）
   window.claude?.use?.('sample').then((s) => { if (s) { ui.sample = s; render(); } }, () => {});
+  document.addEventListener('input', (e) => { if (e.target.id === 'chatInput') ui.chatDraft = e.target.value; });
+  document.addEventListener('keydown', (e) => { if (e.target.id === 'chatInput' && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); chatSend(); } });
 }
 
 // 給測試用的唯讀窗口

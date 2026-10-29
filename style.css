@@ -101,3 +101,12 @@ textarea { width: 100%; min-height: 120px; font: 12px/1.4 ui-monospace, monospac
 .invrow:last-child { border-bottom: none; }
 .invname { flex: 1 1 220px; }
 .aiprompt { white-space: pre-wrap; word-break: break-word; max-height: 320px; overflow: auto; font: 12px/1.5 ui-monospace, monospace; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.rar-R { color: var(--s2); } .rar-SR { color: var(--s4); } .rar-SSR { color: var(--accent); font-weight: 600; }
+.dialog { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 8px 0 12px; display: grid; gap: 8px; }
+.dlines { display: grid; gap: 6px; max-height: 340px; overflow-y: auto; }
+.dl { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; min-width: 0; }
+.dl span { min-width: 0; overflow-wrap: anywhere; }
+.dl.you { color: var(--muted); }
+.chatrow input { flex: 1 1 200px; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
+.talklist .talkrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.moment.meet { line-height: 1.8; }

@@ -1,5 +1,5 @@
 // 遊戲資料。所有角色與數值皆為「垂直切片測試用」，非正式設定。
-export const RULES_VERSION = '0.6.4';
+export const RULES_VERSION = '0.7.0';
 
 export const SKILLS = {
   arrow_shot: { id: 'arrow_shot', name: '射擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
@@ -13,6 +13,16 @@ export const SKILLS = {
   slash: { id: 'slash', name: '斬擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
   rending_cut: { id: 'rending_cut', name: '裂傷斬', kind: 'attack', target: 'enemy', mult: 90, cd: 2, applies: { status_id: 'bleed', turns: 3, power: 4 }, desc: '90% 攻擊並流血 3 回合（可疊 3 層），冷卻 2' },
   cleave: { id: 'cleave', name: '橫掃', kind: 'attack', target: 'all_enemies', mult: 75, cd: 3, desc: '對全體敵人 75% 攻擊，冷卻 3' },
+  // 可招募夥伴與可學技能（v0.7，測試用）
+  quick_stab: { id: 'quick_stab', name: '快刺', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
+  axe_chop: { id: 'axe_chop', name: '劈砍', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
+  herb_dart: { id: 'herb_dart', name: '藥鏢', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
+  herbal_ward: { id: 'herbal_ward', name: '草藥膜', kind: 'shield', target: 'all_allies', power: 10, cd: 4, desc: '全隊獲得 10 點護盾，冷卻 4' },
+  ember_edge: { id: 'ember_edge', name: '燼刃', kind: 'attack', target: 'enemy', mult: 130, cd: 2, applies: { status_id: 'burn', turns: 2, power: 4 }, desc: '130% 攻擊並灼燒 2 回合，冷卻 2' },
+  volley: { id: 'volley', name: '齊射', kind: 'attack', target: 'all_enemies', mult: 65, cd: 3, desc: '對全體敵人 65% 攻擊，冷卻 3' },
+  crushing_blow: { id: 'crushing_blow', name: '碎擊', kind: 'attack', target: 'enemy', mult: 110, cd: 3, applies: { status_id: 'weaken', turns: 2 }, desc: '110% 攻擊並使目標虛弱 2 回合，冷卻 3' },
+  flame_lance: { id: 'flame_lance', name: '炎槍', kind: 'attack', target: 'enemy', mult: 150, cd: 3, desc: '150% 攻擊，冷卻 3' },
+  blood_rush: { id: 'blood_rush', name: '血衝', kind: 'attack', target: 'enemy', mult: 130, cd: 3, applies: { status_id: 'bleed', turns: 2, power: 4 }, desc: '130% 攻擊並流血 2 回合，冷卻 3' },
   // 敵人技能
   claw: { id: 'claw', name: '撕抓', kind: 'attack', target: 'enemy', mult: 100, cd: 0 },
   club_strike: { id: 'club_strike', name: '棍擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0 },
@@ -41,7 +51,26 @@ export const CHARACTERS = {
     bio: '剛從學院出來的術士，第一次下地城。' },
   rook: { id: 'rook', name: '洛克', role: '傭兵劍士', stats: { hp: 86, atk: 12, def: 5, spd: 9, crit: 10 }, skills: ['slash', 'rending_cut', 'cleave'],
     bio: '只認金幣的傭兵。對「神」這個字特別反感。' },
+  // 可招募夥伴（v0.7 抽卡，測試用；正式角色由 P10 決定）
+  talli: { id: 'talli', name: '塔莉', role: '斥候', rarity: 'R', recruit: true, stats: { hp: 64, atk: 13, def: 2, spd: 14, crit: 15 }, skills: ['quick_stab', 'rending_cut'],
+    bio: '在地窖入口賣地圖的少女，自稱走過每一條岔路。' },
+  garn: { id: 'garn', name: '葛恩', role: '重斧手', rarity: 'R', recruit: true, stats: { hp: 112, atk: 12, def: 6, spd: 5, crit: 5 }, skills: ['axe_chop', 'cleave'],
+    bio: '沉默的樵夫，說是來地窖找一棵不會燒起來的樹。' },
+  sera: { id: 'sera', name: '瑟拉', role: '藥師', rarity: 'SR', recruit: true, stats: { hp: 62, atk: 10, def: 3, spd: 9, crit: 5 }, skills: ['herb_dart', 'mend', 'herbal_ward'],
+    bio: '揹著藥箱的旅行藥師，對傷口比對人有興趣。' },
+  karo: { id: 'karo', name: '卡蘿', role: '燼刃劍士', rarity: 'SSR', recruit: true, stats: { hp: 92, atk: 16, def: 5, spd: 11, crit: 15 }, skills: ['slash', 'ember_edge', 'cleave'],
+    bio: '劍上永遠帶著餘燼的流浪劍士，從不說自己從哪裡來。' },
 };
+export const STARTERS = ['airin', 'ade', 'xiaomei', 'rook'];
+
+// 抽卡（v0.7，數值皆為測試用）：只有上陣角色的可學技能會進技能池
+export const LEARNABLE = { airin: ['volley'], ade: ['crushing_blow'], xiaomei: ['flame_lance'], rook: ['blood_rush'], talli: ['volley'], garn: ['crushing_blow'], sera: ['flame_lance'], karo: ['blood_rush'] };
+export const GACHA = {
+  cost: { recruit: 5, skill: 3 },
+  rates: [['SSR', 5], ['SR', 25], ['R', 70]],
+  duplicateRefund: 2,
+};
+export const GEMS = { battleChance: 8, bossFirst: 5, bossRepeat: 2 };
 
 export const ENEMIES = {
   bone_rat: { id: 'bone_rat', name: '骨鼠', stats: { hp: 28, atk: 10, def: 0, spd: 13, crit: 5 }, skills: ['claw'] },
