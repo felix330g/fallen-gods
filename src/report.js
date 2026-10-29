@@ -64,7 +64,7 @@ export function summary(rec, extra = {}) {
     if (e.event_type === 'synergy_trigger_check' && e.calculation.success) highlights.push({ event_id: e.event_id, text: `${nameOf(rec, e.actor_id)} 接續 ${nameOf(rec, e.flags.partner_id)} 發動連攜追擊` });
     if (e.event_type === 'damage_applied' && e.flags?.intercepted_from && !e.flags.dot) highlights.push({ event_id: e.event_id, text: `${nameOf(rec, e.target_ids[0])} 替 ${nameOf(rec, e.flags.intercepted_from)} 擋下 ${nameOf(rec, e.actor_id)} 的攻擊` });
   }
-  const outcomeText = { victory: '勝利', defeat: '全滅', retreat: '回合用盡・撤退' }[rec.result?.outcome] ?? '進行中';
+  const outcomeText = rec.result?.end_reason === 'player_order' ? '依命令撤退' : ({ victory: '勝利', defeat: '全滅', retreat: '回合用盡・撤退' }[rec.result?.outcome] ?? '進行中');
   return { outcome: rec.result?.outcome, outcomeText, rounds: rec.result?.ended_turn ?? rec.turns.length, party, highlights: highlights.slice(0, 8), ...extra };
 }
 
@@ -77,6 +77,25 @@ function hiddenText(e, discoveries, showHidden) {
   }).join('、');
 }
 
+// v0.8 玩家命令與公開修正
+const TACTIC_ZH = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
+export function orderText(rec, o) {
+  const n = (id) => nameOf(rec, id);
+  switch (o?.type) {
+    case 'focus': return `集火 ${n(o.target_id)}`;
+    case 'protect': return `保護 ${n(o.target_id)}`;
+    case 'tactic': return `全隊改為「${TACTIC_ZH[o.value] ?? o.value}」戰術`;
+    case 'burst': return '這一回合全力出手';
+    case 'retreat': return '撤退';
+    case 'brace': return '依情報準備迎擊全體攻擊（兩回合）';
+    case 'exploit': return `依情報攻擊 ${n(o.target_id)} 的破綻`;
+    default: return '（無法理解）';
+  }
+}
+export const ORDER_ERR_ZH = { not_an_object: '格式不對', unknown_type: '沒有這種命令', unknown_field: '格式不對', invalid_target: '目標不在場或已倒下', invalid_value: '沒有這種戰術', needs_intel: '需要先取得情報', no_boss: '這場沒有能預判的對手', not_yet: '時機未到' };
+const KNOWN_ZH = { entrusted: (c) => `託付 防禦 +2`, intel_brace: () => '情報：迎擊準備 防禦 +3', intel_exploit: () => '情報：破綻 傷害 ×120%' };
+const knownText = (c) => (c.known_modifier_ids || []).map((m) => KNOWN_ZH[m]?.(c) ?? m).join('、');
+
 const phaseText = (rec, e) => `${nameOf(rec, e.actor_id)} 進入第二階段：攻擊 +${e.after.atk_bonus}，解鎖 ${e.after.skills_added.map(skillName).join('、')}`;
 
 /** 簡易戰報：每個角色每次行動一行 */
@@ -86,9 +105,12 @@ export function simpleLog(rec, discoveries = {}) {
     let cur = null;
     const flush = () => { if (cur) lines.push(cur); cur = null; };
     for (const e of t.events) {
-      if (e.event_type === 'action_declared') {
+      if (e.event_type === 'order_given' || e.event_type === 'order_invalid') {
         flush();
-        cur = { turn: t.turn_number, event_id: e.event_id, actor: nameOf(rec, e.actor_id), team: rec.combatants.find((c) => c.actor_id === e.actor_id).team, skill: skillName(e.skill_id), parts: [] };
+        lines.push({ turn: t.turn_number, event_id: e.event_id, actor: '你的命令', team: 'party', order: true, skill: orderText(rec, e.flags.order), parts: e.event_type === 'order_invalid' ? [`無法執行（${ORDER_ERR_ZH[e.reason_code] ?? e.reason_code}）`] : [] });
+      } else if (e.event_type === 'action_declared') {
+        flush();
+        cur = { turn: t.turn_number, event_id: e.event_id, actor: nameOf(rec, e.actor_id), team: rec.combatants.find((c) => c.actor_id === e.actor_id).team, skill: skillName(e.skill_id) + (e.flags?.source === 'order' ? '（依命令）' : ''), parts: [] };
       } else if (e.event_type === 'action_invalid') {
         lines.push({ turn: t.turn_number, event_id: e.event_id, actor: nameOf(rec, e.actor_id), skill: '指令無效', parts: [`（${e.reason_code}，改用戰術）`] });
       } else if (e.event_type === 'phase_changed') {
@@ -103,7 +125,7 @@ export function simpleLog(rec, discoveries = {}) {
         if (c.shield_absorbed) p += `（護盾吸收 ${c.shield_absorbed}）`;
         if (c.critical) p += ' 暴擊';
         if (e.flags?.intercepted_from) p += `（替 ${nameOf(rec, e.flags.intercepted_from)} 擋下）`;
-        const h = hiddenText(e, discoveries);
+        const h = [knownText(c), hiddenText(e, discoveries)].filter(Boolean).join('、');
         if (h) p += `〔${h}〕`;
         cur.parts.push(p);
       } else if (cur && e.event_type === 'heal_applied') {
@@ -127,7 +149,7 @@ export function simpleLog(rec, discoveries = {}) {
 
 const TYPE_ZH = { turn_start: '回合開始', turn_end: '回合結束', action_declared: '宣告行動', action_invalid: '指令無效', cooldown_changed: '進入冷卻',
   hit_check: '命中判定', critical_check: '暴擊判定', damage_applied: '傷害', heal_applied: '治療', shield_applied: '護盾', status_applied: '狀態附加',
-  status_expired: '狀態結束', status_removed: '淨化', actor_defeated: '倒下', battle_ended: '戰鬥結束', synergy_trigger_check: '羈絆判定', phase_changed: '階段轉換' };
+  status_expired: '狀態結束', status_removed: '淨化', actor_defeated: '倒下', battle_ended: '戰鬥結束', synergy_trigger_check: '羈絆判定', phase_changed: '階段轉換', order_given: '玩家命令', order_invalid: '命令無效' };
 
 /** 詳細戰報：每個事件一行，含判定與計算 */
 export function detailedLog(rec, discoveries = {}) {
@@ -144,8 +166,8 @@ export function detailedLog(rec, discoveries = {}) {
       case 'damage_applied': {
         if (c.dot) d = `${skillName(e.skill_id)} ${c.power}×${c.stacks} 層${c.resist_ids ? `，${c.resist_ids.map((r) => AFFIXES[r]?.name ?? r).join('・')}減免 ${c.resisted}` : ''} = ${c.raw_damage}`;
         else {
-          const h = hiddenText(e, discoveries);
-          d = `攻擊 ${c.attack}×${c.multiplier}%${c.critical ? '×150%' : ''} = ${c.base}，防禦 ${c.defense}${h ? `（含${h}）` : ''} → ${c.raw_damage}`;
+          const h = [knownText(c), hiddenText(e, discoveries)].filter(Boolean).join('、');
+          d = `攻擊 ${c.attack}×${c.multiplier}%${c.critical ? '×150%' : ''}${c.known_modifier_ids?.includes('intel_exploit') ? '×120%' : ''} = ${c.base}，防禦 ${c.defense}${h ? `（含${h}）` : ''} → ${c.raw_damage}`;
         }
         d += `；護盾 ${c.shield_absorbed}，HP ${e.before.hp}→${e.after.hp}${c.overkill ? `，超殺 ${c.overkill}` : ''}`;
         break;
@@ -158,7 +180,9 @@ export function detailedLog(rec, discoveries = {}) {
       case 'actor_defeated': d = `${nameOf(rec, e.actor_id)} 倒下（來源 ${e.source_event_id.split(':').pop()}）`; break;
       case 'synergy_trigger_check': d = `${nameOf(rec, e.actor_id)}×${nameOf(rec, e.flags.partner_id)} 連攜 Lv${c.level}：機率 ${c.chance}% 擲 ${c.roll} → ${c.success ? '發動' : '未發動'}`; break;
       case 'phase_changed': d = `${phaseText(rec, e)}（HP ${c.hp}/${c.hp_max} ≤ ${c.threshold_pct}%，來源 ${e.source_event_id.split(':').pop()}）`; break;
-      case 'battle_ended': d = `戰鬥結束：${e.reason_code}`; break;
+      case 'battle_ended': d = `戰鬥結束：${e.reason_code === 'player_order' ? '依命令撤退' : e.reason_code}`; break;
+      case 'order_given': d = `你的命令：${orderText(rec, e.flags.order)}`; break;
+      case 'order_invalid': d = `你的命令「${orderText(rec, e.flags.order)}」無法執行：${ORDER_ERR_ZH[e.reason_code] ?? e.reason_code}`; break;
       default: d = e.event_type;
     }
     return { event_id: e.event_id, turn: e.turn_number, type: TYPE_ZH[e.event_type] || e.event_type, raw_type: e.event_type, actor_id: e.actor_id, skill_id: e.skill_id, text: d };

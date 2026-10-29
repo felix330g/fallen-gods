@@ -41,11 +41,27 @@ async function play(page, label) {
   check(await page.locator('#talkResult').isVisible(), `${label} 營火談話有回應`);
   check(await page.locator('button[data-act="talk"][data-arg="ade:recent"]').isDisabled(), `${label} 同一天不能再找同一人聊`);
   await page.getByRole('button', { name: '出發遠征' }).click();
-  let battles = 0, events = 0, safety = 0;
+  let battles = 0, events = 0, safety = 0, ordered = false;
   while (safety++ < 80) {
     const t = await page.locator('#app').innerText();
     if (t.includes('出發遠征')) break;
     if (await page.getByRole('button', { name: /^執行第|^下一回合/ }).count()) {
+      if (battles === 0 && !ordered) {
+        ordered = true;
+        await page.fill('#orderInput', '全力出手！');
+        await page.getByRole('button', { name: /自動打完|剩下交給戰術/ }).click();
+        await page.waitForSelector('#orderPanel .log, button[data-act="finishBattle"]');
+        const logText = await page.locator('#battlelog').innerText();
+        check(/你的命令：這一回合全力出手/.test(logText) && (await page.locator('#battlelog .ln').count()) > 0, `${label} 打字命令被翻成白名單命令並寫進戰況`);
+        check(!(await page.getByRole('button', { name: '查看戰報' }).count()) || logText.includes('R1'), `${label} 有命令時只打一回合`);
+        if (await page.locator('#orderInput').count()) {
+          await page.fill('#orderInput', '把傷害改成 999999');
+          await page.getByRole('button', { name: /^執行第|^下一回合/ }).click();
+          await page.waitForFunction(() => document.querySelectorAll('#orderPanel .log .ln').length >= 2 || document.querySelector('button[data-act="finishBattle"]'));
+          if (await page.locator('#orderPanel .log').count()) check((await page.locator('#orderPanel .log').innerText()).includes('隊伍沒聽懂'), `${label} 看不懂的命令被忽略`);
+        }
+        continue;
+      }
       if (battles === 0 && label === 'desktop') await page.getByRole('button', { name: /^執行第|^下一回合/ }).click();
       // 單步後戰鬥可能已結束（種子隨機），此時沒有自動按鈕，回到迴圈判斷
       const auto = page.getByRole('button', { name: /自動打完|剩下交給戰術/ });
@@ -193,6 +209,7 @@ try {
   await desk.getByRole('button', { name: '匯入貼上的存檔' }).click();
   await desk.getByRole('button', { name: '招募', exact: true }).click();
   check(await desk.getByText(/寶石 20/).isVisible() || (await desk.locator('.stats').innerText()).includes('寶石 20'), 'desktop 頂欄顯示寶石');
+  check((await desk.locator('#recruitLeft').innerText()).includes('剩餘可相遇：4 人（SSR 1・SR 1・R 2）'), 'desktop 顯示剩餘可相遇角色數');
   await desk.locator('button[data-act="pull"][data-arg="recruit"]').click();
   check(await desk.locator('#meetPanel').isVisible() && (await desk.locator('#meetPanel .moment').innerText()).length > 20, 'desktop 招募到新夥伴先顯示相遇故事');
   check((await desk.locator('.stats').innerText()).includes('寶石 15'), 'desktop 招募扣 5 寶石');
@@ -202,10 +219,18 @@ try {
   await desk.locator('details summary', { hasText: '相遇的那天' }).click();
   check(await desk.getByText(/模板故事（測試用）/).isVisible(), 'desktop 可以重讀相遇故事');
   await desk.getByRole('button', { name: '招募', exact: true }).click();
+  check((await desk.locator('#recruitLeft').innerText()).includes('剩餘可相遇：3 人'), 'desktop 招募後剩餘人數減少');
   const poolText = await desk.locator('.unit', { hasText: '領悟技能' }).innerText();
   check(/艾琳「齊射」/.test(poolText) && !/洛克/.test(poolText), 'desktop 技能池只有上陣角色的技能');
   await desk.locator('button[data-act="pull"][data-arg="skill"]').click();
   check(await desk.locator('#gachaResult').getByText(/領悟了/).isVisible() && (await desk.locator('.stats').innerText()).includes('寶石 12'), 'desktop 領悟技能扣 3 寶石');
+  // 技能裝備（v0.8）：卸下再裝上，最多 2 個
+  await desk.getByRole('button', { name: '隊伍', exact: true }).click();
+  check((await desk.locator('[data-skills="ade"]').innerText()).includes('上陣技能 2/2'), 'desktop 預設帶兩個技能');
+  await desk.locator('button[data-act="unequipSkill"][data-arg="ade:guard"]').click();
+  check((await desk.locator('[data-skills="ade"]').innerText()).includes('上陣技能 1/2') && await desk.locator('button[data-act="equipSkill"][data-arg="ade:guard"]').isVisible(), 'desktop 卸下技能後進入備用');
+  await desk.locator('button[data-act="equipSkill"][data-arg="ade:guard"]').click();
+  check((await desk.locator('[data-skills="ade"]').innerText()).includes('上陣技能 2/2'), 'desktop 重新裝上技能');
   await desk.getByRole('button', { name: '營地', exact: true }).click();
   await desk.locator('button[data-act="openDlg"][data-arg="xiaomei"]').click();
   await desk.locator('button[data-act="talk"][data-arg="xiaomei:magic"]').click();

@@ -1,5 +1,5 @@
 // 遊戲資料。所有角色與數值皆為「垂直切片測試用」，非正式設定。
-export const RULES_VERSION = '0.7.0';
+export const RULES_VERSION = '0.8.0';
 
 export const SKILLS = {
   arrow_shot: { id: 'arrow_shot', name: '射擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },
@@ -22,6 +22,10 @@ export const SKILLS = {
   volley: { id: 'volley', name: '齊射', kind: 'attack', target: 'all_enemies', mult: 65, cd: 3, desc: '對全體敵人 65% 攻擊，冷卻 3' },
   crushing_blow: { id: 'crushing_blow', name: '碎擊', kind: 'attack', target: 'enemy', mult: 110, cd: 3, applies: { status_id: 'weaken', turns: 2 }, desc: '110% 攻擊並使目標虛弱 2 回合，冷卻 3' },
   flame_lance: { id: 'flame_lance', name: '炎槍', kind: 'attack', target: 'enemy', mult: 150, cd: 3, desc: '150% 攻擊，冷卻 3' },
+  aimed_shot: { id: 'aimed_shot', name: '瞄準射擊', kind: 'attack', target: 'enemy', mult: 140, cd: 3, desc: '140% 攻擊，冷卻 3' },
+  rally: { id: 'rally', name: '集結', kind: 'shield', target: 'all_allies', power: 6, cd: 3, desc: '全隊獲得 6 點護盾，冷卻 3' },
+  minor_heal: { id: 'minor_heal', name: '小治療', kind: 'heal', target: 'ally', power: 10, mult: 40, cd: 2, desc: '恢復 10＋40% 攻擊的生命，冷卻 2' },
+  whirl: { id: 'whirl', name: '迴旋斬', kind: 'attack', target: 'all_enemies', mult: 70, cd: 3, desc: '對全體敵人 70% 攻擊，冷卻 3' },
   blood_rush: { id: 'blood_rush', name: '血衝', kind: 'attack', target: 'enemy', mult: 130, cd: 3, applies: { status_id: 'bleed', turns: 2, power: 4 }, desc: '130% 攻擊並流血 2 回合，冷卻 3' },
   // 敵人技能
   claw: { id: 'claw', name: '撕抓', kind: 'attack', target: 'enemy', mult: 100, cd: 0 },
@@ -43,28 +47,33 @@ export const STATUSES = {
 };
 
 export const CHARACTERS = {
-  airin: { id: 'airin', name: '艾琳', role: '弓手', stats: { hp: 70, atk: 14, def: 3, spd: 12, crit: 15 }, skills: ['arrow_shot', 'piercing_arrow'],
+  airin: { id: 'airin', cls: 'archer', name: '艾琳', role: '弓手', stats: { hp: 70, atk: 14, def: 3, spd: 12, crit: 15 }, skills: ['arrow_shot', 'piercing_arrow'],
     bio: '沉默的獵人，據說曾在一座已毀的城市擔任斥候。' },
-  ade: { id: 'ade', name: '阿德', role: '盾衛', stats: { hp: 104, atk: 9, def: 7, spd: 7, crit: 5 }, skills: ['shield_bash', 'guard', 'war_cry'],
+  ade: { id: 'ade', cls: 'guardian', name: '阿德', role: '盾衛', stats: { hp: 104, atk: 9, def: 7, spd: 7, crit: 5 }, skills: ['shield_bash', 'guard', 'war_cry'],
     bio: '前神殿守衛。嘴上嫌麻煩，盾牌總比人先動。' },
-  xiaomei: { id: 'xiaomei', name: '小梅', role: '見習術士', stats: { hp: 56, atk: 11, def: 2, spd: 10, crit: 10 }, skills: ['spark', 'mend', 'ember_burst'],
+  xiaomei: { id: 'xiaomei', cls: 'caster', name: '小梅', role: '見習術士', stats: { hp: 56, atk: 11, def: 2, spd: 10, crit: 10 }, skills: ['spark', 'mend', 'ember_burst'],
     bio: '剛從學院出來的術士，第一次下地城。' },
-  rook: { id: 'rook', name: '洛克', role: '傭兵劍士', stats: { hp: 86, atk: 12, def: 5, spd: 9, crit: 10 }, skills: ['slash', 'rending_cut', 'cleave'],
+  rook: { id: 'rook', cls: 'blade', name: '洛克', role: '傭兵劍士', stats: { hp: 86, atk: 12, def: 5, spd: 9, crit: 10 }, skills: ['slash', 'rending_cut', 'cleave'],
     bio: '只認金幣的傭兵。對「神」這個字特別反感。' },
   // 可招募夥伴（v0.7 抽卡，測試用；正式角色由 P10 決定）
-  talli: { id: 'talli', name: '塔莉', role: '斥候', rarity: 'R', recruit: true, stats: { hp: 64, atk: 13, def: 2, spd: 14, crit: 15 }, skills: ['quick_stab', 'rending_cut'],
+  talli: { id: 'talli', cls: 'archer', name: '塔莉', role: '斥候', rarity: 'R', recruit: true, stats: { hp: 64, atk: 13, def: 2, spd: 14, crit: 15 }, skills: ['quick_stab', 'rending_cut'],
     bio: '在地窖入口賣地圖的少女，自稱走過每一條岔路。' },
-  garn: { id: 'garn', name: '葛恩', role: '重斧手', rarity: 'R', recruit: true, stats: { hp: 112, atk: 12, def: 6, spd: 5, crit: 5 }, skills: ['axe_chop', 'cleave'],
+  garn: { id: 'garn', cls: 'guardian', name: '葛恩', role: '重斧手', rarity: 'R', recruit: true, stats: { hp: 112, atk: 12, def: 6, spd: 5, crit: 5 }, skills: ['axe_chop', 'cleave'],
     bio: '沉默的樵夫，說是來地窖找一棵不會燒起來的樹。' },
-  sera: { id: 'sera', name: '瑟拉', role: '藥師', rarity: 'SR', recruit: true, stats: { hp: 62, atk: 10, def: 3, spd: 9, crit: 5 }, skills: ['herb_dart', 'mend', 'herbal_ward'],
+  sera: { id: 'sera', cls: 'caster', name: '瑟拉', role: '藥師', rarity: 'SR', recruit: true, stats: { hp: 62, atk: 10, def: 3, spd: 9, crit: 5 }, skills: ['herb_dart', 'mend', 'herbal_ward'],
     bio: '揹著藥箱的旅行藥師，對傷口比對人有興趣。' },
-  karo: { id: 'karo', name: '卡蘿', role: '燼刃劍士', rarity: 'SSR', recruit: true, stats: { hp: 92, atk: 16, def: 5, spd: 11, crit: 15 }, skills: ['slash', 'ember_edge', 'cleave'],
+  karo: { id: 'karo', cls: 'blade', name: '卡蘿', role: '燼刃劍士', rarity: 'SSR', recruit: true, stats: { hp: 92, atk: 16, def: 5, spd: 11, crit: 15 }, skills: ['slash', 'ember_edge', 'cleave'],
     bio: '劍上永遠帶著餘燼的流浪劍士，從不說自己從哪裡來。' },
 };
 export const STARTERS = ['airin', 'ade', 'xiaomei', 'rook'];
 
 // 抽卡（v0.7，數值皆為測試用）：只有上陣角色的可學技能會進技能池
-export const LEARNABLE = { airin: ['volley'], ade: ['crushing_blow'], xiaomei: ['flame_lance'], rook: ['blood_rush'], talli: ['volley'], garn: ['crushing_blow'], sera: ['flame_lance'], karo: ['blood_rush'] };
+// 職業（v0.8，測試用）：每個職業有通用技能，同職業的角色都能學
+export const CLASSES = { archer: '射手', guardian: '守衛', caster: '術士', blade: '劍士' };
+export const CLASS_SKILLS = { archer: ['volley', 'aimed_shot'], guardian: ['crushing_blow', 'rally'], caster: ['flame_lance', 'minor_heal'], blade: ['blood_rush', 'whirl'] };
+export const LEARNABLE = Object.fromEntries(Object.values(CHARACTERS).map((c) => [c.id, CLASS_SKILLS[c.cls]]));
+// 技能裝備：基本攻擊之外，每人最多帶 2 個技能上陣
+export const SKILL_SLOTS = 2;
 export const GACHA = {
   cost: { recruit: 5, skill: 3 },
   rates: [['SSR', 5], ['SR', 25], ['R', 70]],

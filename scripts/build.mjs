@@ -3,7 +3,7 @@
 //   dist/fragment.html  不含 <html>/<head>/<body> 的片段（給會自動加外框的主機用）
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 
-const ORDER = ['rng', 'data', 'engine', 'report', 'memory', 'narration', 'talk', 'ai', 'game', 'ui'];
+const ORDER = ['rng', 'data', 'engine', 'report', 'memory', 'narration', 'talk', 'ai', 'orders', 'game', 'ui'];
 const root = new URL('..', import.meta.url);
 
 function transform(name, src) {

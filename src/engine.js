@@ -11,7 +11,7 @@ const clone = (o) => JSON.parse(JSON.stringify(o));
  * combatants: [{actor_id, name, team:'party'|'enemy', stats:{hp,atk,def,spd,crit}, skills, tactic?, hp_start?, boss?, rival?, type_id, phase2?}]
  * pairLevels: {pairKey: level}
  */
-export function createBattle({ battleId, seed, combatants, pairLevels = {}, maxRounds = MAX_ROUNDS, encounterId = 'custom' }) {
+export function createBattle({ battleId, seed, combatants, pairLevels = {}, maxRounds = MAX_ROUNDS, encounterId = 'custom', intel = [], bonds = [] }) {
   const record = {
     battle_id: battleId, rules_version: RULES_VERSION, rng_seed: seed >>> 0, encounter_id: encounterId,
     combatants: combatants.map((c) => ({
@@ -27,6 +27,9 @@ export function createBattle({ battleId, seed, combatants, pairLevels = {}, maxR
     player_commands: {},
     result: null,
   };
+  // v0.8：情報與已解鎖的「託付」羈絆（有才寫，舊紀錄不變）
+  if (intel.length) record.intel = [...intel];
+  if (bonds.length) record.bonds = [...bonds];
   const actors = {};
   for (const c of record.combatants) {
     actors[c.actor_id] = { hp: c.hp_start, shield: 0, alive: c.hp_start > 0, cooldowns: {}, statuses: [], phase: 1, atk_bonus: 0 };
@@ -173,10 +176,16 @@ function attack(state, turn, srcId, origTgt, skill, mult, extraFlags = {}) {
       hidden.push(b.id); hiddenDef = b.defBonus; def += hiddenDef;
     }
   }
+  // 公開修正（v0.8）：情報命令與「託付」羈絆。數值寫進 calculation，戰報可回算
+  const known = [];
+  if (intercepted_from && (state.record.bonds || []).includes(pairKey(tgtId, intercepted_from))) { known.push('entrusted'); def += ORDER_RULES.entrustedDef; }
+  if (tgt.team === 'party' && skill.target === 'all_enemies' && state.braceUntil >= state.round) { known.push('intel_brace'); def += ORDER_RULES.braceDef; }
+  if (src.team === 'party' && tgt.boss && state.order?.type === 'exploit') { known.push('intel_exploit'); raw = Math.floor((raw * ORDER_RULES.exploitPct) / 100); }
   if (skill.pierce) def = Math.floor(def / 2);
   const dmg = Math.max(1, raw - def);
   const ev = applyDamage(state, turn, srcId, tgtId, skill.id, {
     attack: atk, multiplier: mult, critical: crit, base: raw, defense: def, hidden_modifier_ids: hidden, hidden_def_bonus: hiddenDef, raw_damage: dmg,
+    ...(known.length ? { known_modifier_ids: known } : {}),
   }, { ...extraFlags, intercepted_from });
   if (skill.applies && state.actors[tgtId].alive && !extraFlags.chain) applyStatus(state, turn, srcId, tgtId, skill.applies, ev);
   return { hit: true, ev, tgtId };
@@ -219,7 +228,23 @@ export function chooseAction(state, id) {
     const tgt = foes[rngInt(state, foes.length) - 1];
     return { skill_id: sk.id, target_id: sk.target === 'all_enemies' ? null : tgt.actor_id };
   }
-  const tactic = me.tactic || 'balanced';
+  const ord = state.order;
+  const tactic = ord?.type === 'tactic' ? ord.value : (me.tactic || 'balanced');
+  const live = (tid) => state.actors[tid]?.alive;
+  // 玩家命令（已由 validateOrder 驗證）：保護 → 爆發 → 集火，其餘照戰術
+  if (ord?.type === 'protect' && live(ord.target_id)) {
+    const T = ord.target_id;
+    const h = skills.find((s) => s.kind === 'heal' && ready(state, id, s.id));
+    if (h && hpPct(state, T) < 90) return { skill_id: h.id, target_id: T, source: 'order' };
+    const gd = skills.find((s) => s.kind === 'guard' && ready(state, id, s.id));
+    if (gd && T !== id && !hasStatus(state, T, 'protected')) return { skill_id: gd.id, target_id: T, source: 'order' };
+  }
+  const focus = (ord?.type === 'focus' || ord?.type === 'exploit') && live(ord.target_id) ? ord.target_id : null;
+  if (state.burstRound === state.round) {
+    const top = skills.filter((s) => s.kind === 'attack' && ready(state, id, s.id)).sort((a, b) => b.mult - a.mult)[0];
+    const low = [...foes].sort((a, b) => state.actors[a.actor_id].hp - state.actors[b.actor_id].hp)[0];
+    if (top) return { skill_id: top.id, target_id: top.target === 'all_enemies' ? null : (focus ?? low.actor_id), source: 'order' };
+  }
   const healTh = { protect: 70, balanced: 50, aggressive: 35 }[tactic] ?? 50;
   const heal = skills.find((s) => s.kind === 'heal' && ready(state, id, s.id));
   if (heal) {
@@ -240,6 +265,10 @@ export function chooseAction(state, id) {
   const shield = skills.find((s) => s.kind === 'shield' && ready(state, id, s.id));
   if (shield && tactic !== 'aggressive' && allies.some((a) => hpPct(state, a.actor_id) < 75)) return { skill_id: shield.id, target_id: null };
   const atks = skills.filter((s) => s.kind === 'attack' && ready(state, id, s.id));
+  if (focus) {
+    const single = atks.filter((s) => s.target === 'enemy').sort((a, b) => b.mult - a.mult)[0];
+    if (single) return { skill_id: single.id, target_id: focus, source: 'order' };
+  }
   const aoe = atks.find((s) => s.target === 'all_enemies');
   if (aoe && foes.length >= 2) return { skill_id: aoe.id, target_id: null };
   const best = atks.filter((s) => s.target === 'enemy').sort((a, b) => b.mult - a.mult)[0];
@@ -334,18 +363,58 @@ function endOfRound(state, turn) {
   }
 }
 
-/** 推進一回合。commands: {actor_id: {skill_id, target_id}}（僅限我方，可省略＝自動） */
-export function stepRound(state, commands = {}) {
+// ── 玩家命令（v0.8）：只接受白名單結構，由引擎驗證後才影響行動 ──────────
+export const ORDER_RULES = { braceDef: 3, exploitPct: 120, entrustedDef: 2 };
+const ORDER_FIELDS = { focus: ['target_id'], protect: ['target_id'], tactic: ['value'], burst: [], retreat: [], brace: [], exploit: ['target_id'] };
+export const ORDER_TYPES = Object.keys(ORDER_FIELDS);
+export function validateOrder(state, order) {
+  if (!order || typeof order !== 'object' || Array.isArray(order)) return 'not_an_object';
+  if (!ORDER_FIELDS[order.type]) return 'unknown_type';
+  if (Object.keys(order).some((k) => k !== 'type' && !ORDER_FIELDS[order.type].includes(k))) return 'unknown_field';
+  const t = order.target_id !== undefined ? info(state, order.target_id) : null;
+  const intel = state.record.intel || [];
+  switch (order.type) {
+    case 'focus': if (!t || t.team !== 'enemy' || !state.actors[t.actor_id].alive) return 'invalid_target'; break;
+    case 'protect': if (!t || t.team !== 'party' || !state.actors[t.actor_id].alive) return 'invalid_target'; break;
+    case 'tactic': if (!['aggressive', 'balanced', 'protect'].includes(order.value)) return 'invalid_value'; break;
+    case 'brace':
+      if (!intel.length) return 'needs_intel';
+      if (!alive(state, 'enemy').some((c) => c.boss)) return 'no_boss';
+      break;
+    case 'exploit':
+      if (!intel.includes('intel_phase2')) return 'needs_intel';
+      if (!t || !t.boss || !state.actors[t.actor_id].alive) return 'invalid_target';
+      if (state.actors[t.actor_id].phase !== 2) return 'not_yet';
+      break;
+  }
+  return null;
+}
+function applyOrder(state, turn, order) {
+  if (order === undefined || order === null) return;
+  state.record.player_orders ||= {};
+  state.record.player_orders[state.round] = clone(order);
+  const err = validateOrder(state, order);
+  if (err) { emit(state, turn, 'order_invalid', { reason_code: err, flags: { order: clone(order) } }); return; }
+  emit(state, turn, 'order_given', { target_ids: order.target_id ? [order.target_id] : [], flags: { order: clone(order) } });
+  if (order.type === 'burst') state.burstRound = state.round;
+  else if (order.type === 'brace') state.braceUntil = state.round + 1;
+  else if (order.type === 'retreat') state.retreatAt = state.round;
+  else state.order = clone(order);
+}
+
+/** 推進一回合。commands: {actor_id: {skill_id, target_id}}（僅限我方，可省略＝自動）；order：玩家命令（可省略） */
+export function stepRound(state, commands = {}, order = null) {
   if (state.done) return null;
   state.round += 1;
   const turn = { turn_number: state.round, start_snapshot: snapshot(state), events: [], end_snapshot: null };
   state.record.turns.push(turn);
   if (Object.keys(commands).length) state.record.player_commands[state.round] = clone(commands);
   emit(state, turn, 'turn_start');
-  const order = state.record.combatants.map((c, i) => ({ c, i })).filter(({ c }) => state.actors[c.actor_id].alive)
+  applyOrder(state, turn, order);
+  const queue = state.record.combatants.map((c, i) => ({ c, i })).filter(({ c }) => state.actors[c.actor_id].alive)
     .sort((x, y) => y.c.stats.spd - x.c.stats.spd || (x.c.team === y.c.team ? 0 : x.c.team === 'party' ? -1 : 1) || x.i - y.i)
     .map(({ c }) => c.actor_id);
-  for (const id of order) {
+  for (const id of queue) {
     if (state.done) break;
     if (!state.actors[id].alive) continue;
     let act = null;
@@ -355,11 +424,16 @@ export function stepRound(state, commands = {}) {
       if (err) emit(state, turn, 'action_invalid', { actor_id: id, reason_code: err });
       else act = { ...cmd, source: 'player' };
     }
-    if (!act) act = { ...chooseAction(state, id), source: 'tactic' };
+    if (!act) act = { source: 'tactic', ...chooseAction(state, id) };
     execute(state, turn, id, act);
     if (checkEnd(state, turn)) break;
   }
   if (!state.done) endOfRound(state, turn);
+  if (!state.done && state.retreatAt === state.round) {
+    state.done = true;
+    state.record.result = { outcome: 'retreat', end_reason: 'player_order', winner_team: null, ended_turn: turn.turn_number };
+    emit(state, turn, 'battle_ended', { reason_code: 'player_order', flags: { outcome: 'retreat' } });
+  }
   if (!state.done && state.round >= state.record.max_rounds) {
     state.done = true;
     state.record.result = { outcome: 'retreat', end_reason: 'round_limit', winner_team: null, ended_turn: turn.turn_number };
@@ -399,6 +473,13 @@ export function verifyRecord(record) {
           if (JSON.stringify(want) !== JSON.stringify(got) || e.calculation.raw_damage !== expect || (e.calculation.resisted || 0) !== full - expect) errors.push(`${e.event_id} 持續傷害減免對不上`);
         }
         if (e.calculation.shield_absorbed + e.calculation.hp_damage + e.calculation.overkill !== e.calculation.raw_damage) errors.push(`${e.event_id} 傷害拆分不平衡`);
+        for (const m of e.calculation.known_modifier_ids || []) {
+          const ok = m === 'entrusted' ? !!e.flags?.intercepted_from && (record.bonds || []).includes(pairKey(id, e.flags.intercepted_from))
+            : m === 'intel_brace' ? (record.intel || []).length > 0 && [t.turn_number, t.turn_number - 1].some((n) => record.player_orders?.[n]?.type === 'brace')
+            : m === 'intel_exploit' ? (record.intel || []).includes('intel_phase2') && Object.entries(record.player_orders || {}).some(([n, o]) => o?.type === 'exploit' && +n <= t.turn_number)
+            : false;
+          if (!ok) errors.push(`${e.event_id} 修正 ${m} 沒有對應的命令、情報或羈絆`);
+        }
       } else if (e.event_type === 'heal_applied') {
         hp[e.target_ids[0]] += e.calculation.effective;
       } else if (e.event_type === 'shield_applied') {
@@ -423,10 +504,10 @@ export function verifyRecord(record) {
 }
 
 /** 以紀錄中的設定與玩家指令重播，檢查是否完全一致 */
-export function replay(record, commandsByTurn = record.player_commands || {}) {
+export function replay(record, commandsByTurn = record.player_commands || {}, ordersByTurn = record.player_orders || {}) {
   const st = createBattle({ battleId: record.battle_id, seed: record.rng_seed, encounterId: record.encounter_id, maxRounds: record.max_rounds,
-    pairLevels: record.pair_levels,
+    pairLevels: record.pair_levels, intel: record.intel || [], bonds: record.bonds || [],
     combatants: record.combatants.map((c) => ({ ...c, stats: { ...c.stats } })) });
-  while (!st.done) stepRound(st, commandsByTurn[st.round + 1] || {});
+  while (!st.done) stepRound(st, commandsByTurn[st.round + 1] || {}, ordersByTurn[st.round + 1] ?? null);
   return st.record;
 }

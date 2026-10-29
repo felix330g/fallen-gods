@@ -1,6 +1,6 @@
 // 遊戲狀態（純資料＋純函式，無 DOM）。UI 與測試都經由這裡操作。
-import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, RESISTS, SALVAGE_GOLD, itemDef, STARTERS, LEARNABLE, GACHA, GEMS, SKILLS } from './data.js';
-import { createBattle, stepRound, verifyRecord, pairKey, pairLevel } from './engine.js';
+import { CHARACTERS, ENEMIES, DUNGEON, ENCOUNTER_EVENTS, PARTY_SIZE, POTION_HEAL, POTION_PRICE, BONDS, AFFIXES, AFFIX_TABLE, RESISTS, SALVAGE_GOLD, itemDef, STARTERS, LEARNABLE, GACHA, GEMS, SKILLS, SKILL_SLOTS } from './data.js';
+import { createBattle, stepRound, verifyRecord, pairKey, pairLevel, ORDER_RULES } from './engine.js';
 import { hashSeed, rngInt } from './rng.js';
 import { deriveMemories, verifyMemories } from './memory.js';
 import { buildMoments, verifyMoments } from './narration.js';
@@ -10,17 +10,32 @@ import { validateTalk, talkLine, AFFINITY_MAX } from './talk.js';
 export const SAVE_VERSION = 1;
 const STEPS_PER_FLOOR = 3;
 
-const newMember = () => ({ level: 1, xp: 0, equip: { weapon: null, armor: null }, career_kills: 0, learned: [] });
+// 第一個技能是基本攻擊（永遠帶著）；其餘是可裝備的技能
+const specials = (id) => CHARACTERS[id].skills.slice(1);
+const defaultEquipped = (id) => specials(id).slice(0, SKILL_SLOTS);
+const newMember = (id) => ({ level: 1, xp: 0, equip: { weapon: null, armor: null }, career_kills: 0, learned: [], equipped: defaultEquipped(id) });
+/** 可以裝備的技能：角色專屬技能＋抽到的職業技能 */
+export const ownedSkills = (game, id) => [...specials(id), ...(game.roster[id]?.learned || [])];
 /** 已擁有（在名冊裡）的角色，依資料順序 */
 export const ownedIds = (game) => Object.keys(CHARACTERS).filter((id) => game.roster[id]);
 /** 戰鬥用技能：基本技能＋抽到的可學技能 */
-export const battleSkills = (game, id) => [...CHARACTERS[id].skills, ...(game.roster[id]?.learned || [])];
+export const battleSkills = (game, id) => [CHARACTERS[id].skills[0], ...(game.roster[id]?.equipped ?? defaultEquipped(id))];
+
+/** 設定上陣技能（最多 SKILL_SLOTS 個，只能是已擁有的技能） */
+export function setSkills(game, id, list) {
+  if (!game.roster[id]) throw new Error('沒有這個角色');
+  if (game.expedition) throw new Error('遠征中不能換技能');
+  if (!Array.isArray(list) || list.length > SKILL_SLOTS || new Set(list).size !== list.length) throw new Error(`最多帶 ${SKILL_SLOTS} 個技能`);
+  const owned = ownedSkills(game, id);
+  if (list.some((s) => !owned.includes(s))) throw new Error('還沒學會這個技能');
+  game.roster[id].equipped = [...list];
+}
 
 export function newGame(seed = Date.now() % 1e9) {
   const roster = {};
-  for (const id of STARTERS) roster[id] = newMember();
+  for (const id of STARTERS) roster[id] = newMember(id);
   return {
-    version: SAVE_VERSION, seed: seed >>> 0, day: 1, gold: 60, gems: 0, pulls: 0, pendingRecruit: null, potions: 2, expeditions: 0, battles_fought: 0, clears: 0,
+    version: SAVE_VERSION, seed: seed >>> 0, day: 1, gold: 60, gems: 0, pulls: 0, pendingRecruit: null, orderBond: {}, entrusted: [], potions: 2, expeditions: 0, battles_fought: 0, clears: 0,
     roster, party: ['airin', 'ade', 'xiaomei'], tactics: { airin: 'balanced', ade: 'balanced', xiaomei: 'balanced', rook: 'balanced' },
     inventory: [], pairs: {}, discoveries: { guardian_trust: { status: 'undiscovered', observations: 0, test_with: false, test_control: false } },
     memories: [], history: [], reports: [], flags: {}, settings: { density: 3, mode: 'auto' },
@@ -281,7 +296,10 @@ export function beginBattle(game) {
     combatants.push({ actor_id: `${eid}_${counts[eid]}`, type_id: eid, name: dup ? `${e.name} ${'ABC'[counts[eid] - 1]}` : e.name, team: 'enemy',
       stats, skills: e.skills, boss: e.boss, rival: e.rival, phase2: e.phase2 });
   }
-  return createBattle({ battleId: `b${n}`, seed: hashSeed(game.seed, 'battle', n), combatants, pairLevels: pairLevels(game, game.party), encounterId: `${DUNGEON.id}:${ex.floor}:${ex.step}` });
+  // 情報只對 Boss 戰有用；「託付」只帶入這次上陣的兩人
+  const intel = ex.pending.type === 'boss' ? ['intel_boss', 'intel_phase2'].filter((f) => game.flags[f]) : [];
+  const bonds = (game.entrusted || []).filter((p) => p.split('|').every((x) => game.party.includes(x)));
+  return createBattle({ battleId: `b${n}`, seed: hashSeed(game.seed, 'battle', n), combatants, pairLevels: pairLevels(game, game.party), encounterId: `${DUNGEON.id}:${ex.floor}:${ex.step}`, intel, bonds });
 }
 
 /** 戰後結算。一致性驗證不通過就丟出錯誤，不寫入存檔。 */
@@ -344,6 +362,23 @@ export function finishBattle(game, record) {
     game.pairs[key] = { xp: Math.min(100, cur + gain) };
     pairGain[key] = gain;
   }
+  // 命令獎勵（v0.8，測試數值）：只算命令裡配合的兩人
+  const orderRewards = orderOutcome(record);
+  for (const [key, n] of Object.entries(orderRewards.pairs)) {
+    const cur = game.pairs[key]?.xp || 0;
+    const add = Math.min(100 - cur, ORDER_REWARD.pairXp * n);
+    if (add > 0) { game.pairs[key] = { xp: cur + add }; pairGain[key] = (pairGain[key] || 0) + add; }
+    game.orderBond[key] = (game.orderBond[key] || 0) + n;
+    if (game.orderBond[key] >= ORDER_REWARD.entrustAfter && !game.entrusted.includes(key)) {
+      game.entrusted.push(key);
+      orderRewards.unlocked.push(key);
+      const [a, b] = key.split('|');
+      game.log.push(`羈絆解鎖：${CHARACTERS[a].name}與${CHARACTERS[b].name}之間的【託付】。`);
+      game.memories.push({ key: `entrusted:${key}`, type: 'entrusted', actors: [a, b], event_ids: orderRewards.events[key], ref_keys: [], witnesses: [a, b], battle_id: record.battle_id, day: game.day,
+        text: `${CHARACTERS[a].name}與${CHARACTERS[b].name}照著你的命令一次次守住彼此，兩人之間有了【託付】（守護對方時防禦 +${ORDER_REWARD.entrustedDef}）。` });
+    }
+  }
+  for (const id of Object.keys(orderRewards.affinity)) game.affinity[id] = Math.min(AFFINITY_MAX, (game.affinity[id] || 0) + 1);
   // 黑盒子觀測
   const d = game.discoveries.guardian_trust;
   const hiddenHits = evs.filter((e) => e.calculation?.hidden_modifier_ids?.includes('guardian_trust')).length;
@@ -370,7 +405,7 @@ export function finishBattle(game, record) {
     gems = gemRoll(game, ex.pending.type === 'boss' && game.flags.boss_kills === 1, ex.pending.type === 'boss');
     ex.gems = (ex.gems || 0) + gems;
   }
-  const report = { record, moments: safeMoments, moment_errors: momErrs, newMemories: newMem.map((m) => m.key), levelUps, pairGain, gold, gems, loot, day: game.day };
+  const report = { record, moments: safeMoments, moment_errors: momErrs, newMemories: newMem.map((m) => m.key), levelUps, pairGain, gold, gems, loot, orderRewards, day: game.day };
   game.reports.push(report);
   game.reports = game.reports.slice(-5);
   if (outcome === 'defeat') endExpedition(game, 'defeat');
@@ -438,6 +473,38 @@ function recordBondConfirmed(game, r) {
   });
 }
 
+// ── 命令獎勵（v0.8，測試數值）──────────────────────────
+export const ORDER_REWARD = { pairXp: 5, entrustAfter: 3, entrustedDef: ORDER_RULES.entrustedDef };
+/**
+ * 從事件判定命令成果（純函式）：
+ * - 依命令守護／治療隊友，且對方撐到戰鬥結束 → 這兩人熟練度上升、雙方好感 +1
+ * - 擊倒集火目標 → 擊倒者好感 +1
+ */
+export function orderOutcome(record) {
+  const evs = allEvents(record);
+  const last = record.turns.at(-1).end_snapshot.actors;
+  const res = { pairs: {}, affinity: {}, events: {}, unlocked: [] };
+  const seen = new Set();
+  for (const e of evs) {
+    if (e.event_type !== 'action_declared' || e.flags?.source !== 'order') continue;
+    const sk = SKILLS[e.skill_id], T = e.target_ids[0];
+    if (!['guard', 'heal'].includes(sk.kind) || !T || T === e.actor_id || !last[T]?.alive) continue;
+    const key = pairKey(e.actor_id, T);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    res.pairs[key] = 1; res.events[key] = [e.event_id];
+    res.affinity[e.actor_id] = 1; res.affinity[T] = 1;
+  }
+  const byId = Object.fromEntries(evs.map((e) => [e.event_id, e]));
+  const focused = evs.filter((e) => e.event_type === 'order_given' && ['focus', 'exploit'].includes(e.flags.order.type));
+  for (const e of evs) {
+    if (e.event_type !== 'actor_defeated') continue;
+    const killer = byId[e.source_event_id]?.actor_id;
+    if (focused.some((o) => o.flags.order.target_id === e.actor_id && o.sequence < e.sequence) && record.combatants.find((c) => c.actor_id === killer)?.team === 'party') res.affinity[killer] = 1;
+  }
+  return res;
+}
+
 // ── 寶石與抽卡（v0.7，數值皆為測試用）──────────────────
 // 寶石掉落用獨立亂數（salt 'gem'），不影響戰鬥與既有掉落結果
 function gemRoll(game, bossFirst, boss) {
@@ -470,7 +537,9 @@ export function pull(game, pool, opts = {}) {
   if (!opts.free) game.gems -= cost;
   if (pool === 'skill') {
     const pick = candidates[rngInt(r, candidates.length) - 1];
-    game.roster[pick.actor_id].learned.push(pick.skill_id);
+    const mem = game.roster[pick.actor_id];
+    mem.learned.push(pick.skill_id);
+    if (mem.equipped.length < SKILL_SLOTS) mem.equipped.push(pick.skill_id);
     game.log.push(`${CHARACTERS[pick.actor_id].name}領悟了「${SKILLS[pick.skill_id].name}」。`);
     return { pool, ...pick };
   }
@@ -494,7 +563,7 @@ export function joinRecruit(game, story) {
   const p = game.pendingRecruit;
   if (!p) throw new Error('沒有等待入隊的夥伴');
   const text = typeof story?.text === 'string' ? story.text.slice(0, 600) : '';
-  game.roster[p.id] = { ...newMember(), meet: { text, ai: !!story?.ai, day: game.day } };
+  game.roster[p.id] = { ...newMember(p.id), meet: { text, ai: !!story?.ai, day: game.day } };
   game.tactics[p.id] = 'balanced';
   game.pendingRecruit = null;
   game.log.push(`${CHARACTERS[p.id].name}（${p.rarity}）加入了隊伍。`);
@@ -512,10 +581,14 @@ export function deserialize(text) {
   if (Object.keys(g.roster).some((id) => !CHARACTERS[id])) throw new Error('存檔中有未知角色');
   if (g.party.some((id) => !g.roster[id])) throw new Error('存檔中有未知角色');
   // v0.7 相容：寶石、抽卡、可學技能
-  g.gems ??= 0; g.pulls ??= 0; g.pendingRecruit ??= null;
+  g.gems ??= 0; g.pulls ??= 0; g.pendingRecruit ??= null; g.orderBond ??= {}; g.entrusted ??= [];
+  if (!Array.isArray(g.entrusted) || g.entrusted.some((p) => typeof p !== 'string' || p.split('|').length !== 2 || p.split('|').some((x) => !CHARACTERS[x]) || (g.orderBond[p] || 0) < ORDER_REWARD.entrustAfter)) throw new Error('存檔中的羈絆資料不合法');
   for (const [id, r] of Object.entries(g.roster)) {
     r.learned ||= [];
     if (r.learned.some((s) => !(LEARNABLE[id] || []).includes(s))) throw new Error('存檔中有不合法的技能');
+    r.equipped ||= defaultEquipped(id);
+    const own = [...specials(id), ...r.learned];
+    if (r.equipped.length > SKILL_SLOTS || r.equipped.some((s) => !own.includes(s))) throw new Error('存檔中有不合法的技能');
   }
   if (g.pendingRecruit && (!CHARACTERS[g.pendingRecruit.id]?.recruit || g.roster[g.pendingRecruit.id])) throw new Error('存檔中的招募資料不合法');
   if (typeof g.gems !== 'number' || g.gems < 0) throw new Error('存檔中的寶石數量不合法');

@@ -1,13 +1,14 @@
 // 介面層：只讀寫 game.js 的 API，不直接改數值。
-import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef, statDiffText, inventoryOrder, GACHA, LEARNABLE } from './data.js';
-import { stepRound, chooseAction, currentSkills, pairKey, pairLevel } from './engine.js';
+import { CHARACTERS, SKILLS, STATUSES, DUNGEON, ENCOUNTER_EVENTS, BONDS, ENEMIES, POTION_PRICE, RULES_VERSION, SALVAGE_GOLD, itemDef, statDiffText, inventoryOrder, GACHA, LEARNABLE, CLASSES, SKILL_SLOTS } from './data.js';
+import { stepRound, chooseAction, currentSkills, pairKey, pairLevel, validateOrder } from './engine.js';
+import { parseOrderText, buildOrderPrompt, shapeOrder, ackLine, ORDER_INPUT_MAX } from './orders.js';
 import * as G from './game.js';
-import { summary, simpleLog, detailedLog, filterDetailedLog, filterOptions, computeStats, hpCurve, skillLabel } from './report.js';
+import { summary, simpleLog, detailedLog, filterDetailedLog, filterOptions, computeStats, hpCurve, skillLabel, orderText } from './report.js';
 import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX, TOPICS, followLine, talkLine } from './talk.js';
 import { buildPrompt, validateAI, aiEligible, MEET_TEMPLATES, buildMeetPrompt, validateMeet, CHAT_AFFINITY, CHAT_INPUT_MAX, buildChatTurns, validateChat } from './ai.js';
 
 const SAVE_KEY = 'fallen-gods-save-v1';
-const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null, sample: null, ai: {}, aiCtl: null, testMode: false, gacha: null, meet: null, dlg: null, chatDraft: '' };
+const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null, sample: null, ai: {}, aiCtl: null, testMode: false, gacha: null, meet: null, dlg: null, chatDraft: '', orderDraft: '', orderBusy: false, orderNotes: [] };
 const root = () => document.getElementById('app');
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const TACTIC = { aggressive: '進攻', balanced: '均衡', protect: '守護' };
@@ -27,7 +28,7 @@ function routeFromGame() {
 }
 
 function startBattleView() {
-  ui.battle = G.beginBattle(ui.game);
+  ui.battle = G.beginBattle(ui.game); ui.orderNotes = []; ui.orderDraft = '';
   ui.cmds = {};
   ui.view = 'battle';
 }
@@ -140,10 +141,11 @@ function tabGacha() {
     <div class="grid">
       <div class="unit"><div class="name"><b>招募夥伴</b><span class="small muted">${cost.recruit} 寶石</span></div>
         <p class="small">機率：${GACHA.rates.map(([r, p]) => `${r} ${p}%`).join('・')}。抽到的人會先和你相遇，再加入隊伍。已有的稀有度全員到齊時退回 ${GACHA.duplicateRefund} 寶石。</p>
+        <p class="small" id="recruitLeft">剩餘可相遇：<b>${fresh.length}</b> 人（${GACHA.rates.map(([r]) => `${r} ${fresh.filter((c) => c.rarity === r).length}`).join('・')}）</p>
         <p class="small muted">尚未遇見：${fresh.map((c) => `${c.name}（${c.rarity}）`).join('、') || '全員到齊'}</p>
         <button class="primary" data-act="pull" data-arg="recruit" ${can(cost.recruit) ? '' : 'disabled'}>招募一次</button></div>
       <div class="unit"><div class="name"><b>領悟技能</b><span class="small muted">${cost.skill} 寶石</span></div>
-        <p class="small">只有目前上陣的三人的技能會被抽到。換人出陣，卡池就跟著換。</p>
+        <p class="small">卡池是上陣三人所屬職業的通用技能（${[...new Set(g.party.map((id) => CLASSES[CHARACTERS[id].cls]))].join('、')}）。換人出陣，卡池就跟著換。學到後在「隊伍」分頁裝備，每人最多帶 ${SKILL_SLOTS} 個技能上陣。</p>
         <p class="small muted">${pool.length ? `卡池：${pool.map((p) => `${CHARACTERS[p.actor_id].name}「${SKILLS[p.skill_id].name}」`).join('、')}` : '上陣角色已經學會所有可學技能。'}</p>
         <button class="primary" data-act="pull" data-arg="skill" ${can(cost.skill) && pool.length ? '' : 'disabled'}>領悟一次</button></div>
     </div></div>`;
@@ -192,7 +194,8 @@ function tabParty() {
       <button data-act="toggleParty" data-arg="${c.id}" class="${inParty ? 'primary' : ''}">${inParty ? '在隊伍中' : '加入'}</button></div>
       <p class="small muted">${esc(c.bio)}</p>
       <div class="small">命 ${st.hp}・攻 ${st.atk}・防 ${st.def}・速 ${st.spd}・暴 ${st.crit}%　經驗 ${r.xp}/${r.level * 60}</div>
-      <div class="small">${c.skills.map((s) => `<span class="chip" title="${esc(SKILLS[s].desc)}">${SKILLS[s].name}</span>`).join('')}${r.learned.map((s) => `<span class="chip warn" title="${esc(SKILLS[s].desc)}">領悟・${SKILLS[s].name}</span>`).join('')}</div>
+      <div class="small skillset" data-skills="${c.id}"><span class="muted">${CLASSES[c.cls]}・上陣技能 ${r.equipped.length}/${SKILL_SLOTS}：</span><span class="chip" title="${esc(SKILLS[c.skills[0]].desc)}">${SKILLS[c.skills[0]].name}</span>${r.equipped.map((s) => `<span class="chip on" title="${esc(SKILLS[s].desc)}">${SKILLS[s].name} <button class="link" data-act="unequipSkill" data-arg="${c.id}:${s}">卸下</button></span>`).join('')}</div>
+      ${G.ownedSkills(g, c.id).filter((s) => !r.equipped.includes(s)).length ? `<div class="small skillset"><span class="muted">備用：</span>${G.ownedSkills(g, c.id).filter((s) => !r.equipped.includes(s)).map((s) => `<span class="chip" title="${esc(SKILLS[s].desc)}">${r.learned.includes(s) ? '領悟・' : ''}${SKILLS[s].name} <button class="link" data-act="equipSkill" data-arg="${c.id}:${s}" ${r.equipped.length >= SKILL_SLOTS ? 'disabled' : ''}>裝上</button></span>`).join('')}</div>` : ''}
       ${r.meet?.text ? `<details class="small"><summary>相遇的那天</summary><p>${esc(r.meet.text)}</p><p class="muted">${r.meet.ai ? 'AI 生成的相遇故事，只是回憶，不代表正式設定。' : '模板故事（測試用）。'}</p></details>` : ''}
       <div class="row small" style="margin-top:6px">戰術 <select data-change="tactic" data-arg="${c.id}">${Object.entries(TACTIC).map(([k, n]) => `<option value="${k}" ${g.tactics[c.id] === k ? 'selected' : ''}>${n}</option>`).join('')}</select></div></div>`;
   }).join('');
@@ -200,12 +203,13 @@ function tabParty() {
   let pairs = '';
   for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++) {
     const xp = G.pairXp(g, ids[i], ids[j]);
-    pairs += `<tr><td>${CHARACTERS[ids[i]].name} × ${CHARACTERS[ids[j]].name}</td><td>Lv${pairLevel(xp)}</td><td>${xp}/100</td></tr>`;
+    const pk = pairKey(ids[i], ids[j]), ob = g.orderBond?.[pk] || 0;
+    pairs += `<tr><td>${CHARACTERS[ids[i]].name} × ${CHARACTERS[ids[j]].name}</td><td>Lv${pairLevel(xp)}</td><td>${xp}/100</td><td>${g.entrusted?.includes(pk) ? '<span class="chip warn">託付</span>' : ob ? `${ob}/${G.ORDER_REWARD.entrustAfter}` : '—'}</td></tr>`;
   }
   return `<div class="panel"><h2>隊伍編成</h2><p class="small muted">選三人出發。戰術決定自動戰鬥時的行為：進攻＝集火、少用支援；均衡；守護＝提早治療與守護、優先打攻擊力高的敵人。</p>
     <p>目前：${g.party.map((id) => CHARACTERS[id].name).join('、')}（${g.party.length}/3）</p><div class="grid">${cards}</div></div>
     <div class="panel"><h2>雙人合作熟練度</h2><p class="small muted">只計算兩人之間。換掉第三人不會影響其他搭檔。熟練度 Lv1 起可觸發連攜追擊。</p>
-    <div class="tablewrap"><table><tr><th>搭檔</th><th>等級</th><th>熟練度</th></tr>${pairs}</table></div></div>`;
+    <p class="small muted">戰鬥中用命令讓其中一人守護或治療另一人、且對方撐到最後，算一次成功的託付；同一對成功 ${G.ORDER_REWARD.entrustAfter} 次會解鎖【託付】（守護對方時防禦 +${G.ORDER_REWARD.entrustedDef}，測試用）。</p><div class="tablewrap"><table><tr><th>搭檔</th><th>等級</th><th>熟練度</th><th>託付</th></tr>${pairs}</table></div></div>`;
 }
 function tabGear() {
   const g = ui.game;
@@ -337,7 +341,39 @@ function viewBattle() {
     <div class="panel"><h3>我方</h3><div class="side">${party.map((c) => unitCard(st, c)).join('')}</div></div>
     <div class="panel"><div class="row" style="justify-content:space-between"><h3>戰況</h3><span class="small muted">第 ${st.round} 回合${st.done ? '・結束' : ''}</span></div>
     <div class="log" id="battlelog">${lines.length ? lines.map((l) => `<div class="ln ${l.team === 'enemy' ? 'enemy' : ''}"><span class="t">R${l.turn}</span>${esc(l.text)}</div>`).join('') : '<div class="ln muted">戰鬥開始。</div>'}</div></div>
+    ${st.done ? '' : orderPanel(st)}
     <div class="panel">${controls}</div>`;
+}
+function orderPanel(st) {
+  const intel = st.record.intel || [];
+  const hint = intel.length ? `有情報時可以喊${intel.includes('intel_boss') || intel.includes('intel_phase2') ? '「小心全體攻擊」' : ''}${intel.includes('intel_phase2') ? '、第二階段時喊「打它的破綻」' : ''}。` : '';
+  const notes = ui.orderNotes.slice(-3).map((n) => `<div class="ln"><span class="t">R${n.turn}</span>你：「${esc(n.said)}」→ ${n.order ? `<b>${esc(n.understood)}</b>${n.via === 'AI' ? ' <span class="chip">AI 翻譯</span>' : ''}${n.ack ? `　${esc(n.ack.speaker)}：${esc(n.ack.text)}` : ''}` : '<span class="muted">隊伍沒聽懂，照原本的戰術行動。</span>'}</div>`).join('');
+  return `<div class="panel" id="orderPanel"><label class="small" for="orderInput"><b>對隊伍喊話</b>　留白＝不說話，照戰術行動；有寫字時，按任一個按鈕都只打一回合。</label>
+    <div class="row chatrow"><input id="orderInput" maxlength="${ORDER_INPUT_MAX}" placeholder="例如：集火哥布林、保護小梅、全力出手、撤退" value="${esc(ui.orderDraft)}" ${ui.orderBusy ? 'disabled' : ''}>${ui.orderBusy ? '<span class="small muted">隊伍正在理解你的命令……</span>' : ''}</div>
+    <p class="small muted">命令只會被翻成固定的幾種戰術指令（集火、保護、改戰術、全力出手、撤退${intel.length ? '、依情報迎擊或攻擊破綻' : ''}），數值和結果仍由規則決定。${hint}</p>
+    ${notes ? `<div class="log">${notes}</div>` : ''}</div>`;
+}
+async function issueOrder() {
+  const st = ui.battle, said = ui.orderDraft.trim().slice(0, ORDER_INPUT_MAX);
+  if (!st || st.done || !said || ui.orderBusy) return;
+  ui.orderBusy = true; render();
+  let order = null, via = null;
+  if (ui.sample) {
+    try {
+      const o = shapeOrder(await ui.sample.json(buildOrderPrompt(said, st), { modelTier: 'quick', cache: false }));
+      if (o && !validateOrder(st, o)) { order = o; via = 'AI'; }
+    } catch (e) {
+      if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    }
+  }
+  if (!order) { order = parseOrderText(said, st); via = order ? '關鍵字' : null; }
+  if (ui.battle !== st) return;
+  const valid = order && !validateOrder(st, order);
+  stepRound(st, ui.game.settings.mode === 'manual' ? ui.cmds : {}, order);
+  ui.cmds = {};
+  ui.orderNotes.push({ turn: st.round, said, order, via, understood: order ? orderText(st.record, order) + (valid ? '' : '（無法執行）') : null, ack: valid ? ackLine(order, st) : null });
+  ui.orderDraft = ''; ui.orderBusy = false;
+  render();
 }
 
 // ── 戰報 ──────────────────────────────────────────
@@ -359,6 +395,9 @@ function repSummary(rep, rec) {
   if (rep.gems) rewards.push(`寶石 +${rep.gems}`);
   for (const it of rep.loot) rewards.push(itemDef(it).name);
   for (const id of rep.levelUps) rewards.push(`${CHARACTERS[id].name} 升級`);
+  const orw = rep.orderRewards;
+  if (orw && Object.keys(orw.affinity).length) rewards.push(`好感 +1（依命令行動）：${Object.keys(orw.affinity).map((x) => CHARACTERS[x].name).join('、')}`);
+  for (const k of orw?.unlocked || []) rewards.push(`羈絆解鎖【託付】：${k.split('|').map((x) => CHARACTERS[x].name).join('×')}`);
   for (const [k, v] of Object.entries(rep.pairGain)) if (v) rewards.push(`${k.split('|').map((x) => CHARACTERS[x].name).join('×')} 熟練度 +${v}`);
   const mems = rep.newMemories.map((k) => g().memories.find((m) => m.key === k)).filter(Boolean);
   return `<div class="panel"><h2><span class="chip ${s.outcome === 'victory' ? 'good' : 'bad'}" style="font-size:16px">${s.outcomeText}</span> ${s.rounds} 回合</h2>
@@ -507,6 +546,8 @@ function act(name, arg) {
       break;
     }
     case 'meetAI': meetAI(); break;
+    case 'equipSkill': { const [id, sk] = arg.split(':'); G.setSkills(game, id, [...game.roster[id].equipped, sk]); save(); break; }
+    case 'unequipSkill': { const [id, sk] = arg.split(':'); G.setSkills(game, id, game.roster[id].equipped.filter((x) => x !== sk)); save(); break; }
     case 'join': {
       const id = game.pendingRecruit.id, m = ui.meet?.id === id ? ui.meet : null;
       G.joinRecruit(game, m?.story ? { text: m.story, ai: true } : { text: MEET_TEMPLATES[id], ai: false }); save();
@@ -529,8 +570,12 @@ function act(name, arg) {
     case 'retreatYes': G.retreat(game); save(); ui.view = 'camp'; ui.tab = 'camp'; break;
     case 'route': { const r = G.chooseRoute(game, +arg); save(); if (r === 'battle') startBattleView(); else if (r === 'event') ui.view = 'event'; else routeFromGame(); break; }
     case 'eventChoice': { const m = G.resolveEvent(game, arg); save(); ui.msg = m.length ? m.join('，') : null; routeFromGame(); break; }
-    case 'round': stepRound(ui.battle, game.settings.mode === 'manual' ? ui.cmds : {}); ui.cmds = {}; break;
-    case 'autoAll': while (!ui.battle.done) stepRound(ui.battle); break;
+    case 'round':
+    case 'autoAll':
+      // 有寫命令：不論按哪個鈕都只打一回合
+      if (ui.orderDraft.trim()) { issueOrder(); break; }
+      if (name === 'round') { stepRound(ui.battle, game.settings.mode === 'manual' ? ui.cmds : {}); ui.cmds = {}; } else while (!ui.battle.done) stepRound(ui.battle);
+      break;
     case 'finishBattle': {
       G.finishBattle(game, ui.battle.record); save();
       ui.battle = null; ui.reportIdx = game.reports.length - 1; ui.rtab = 'summary'; ui.fromExpedition = true; ui.view = 'report'; resetLogView();
@@ -617,7 +662,8 @@ export function boot() {
   render();
   // claude.ai 託管頁面：可以請 Claude 改寫演出、相遇故事、營火聊天（其他環境沒有 window.claude，功能隱藏）
   window.claude?.use?.('sample').then((s) => { if (s) { ui.sample = s; render(); } }, () => {});
-  document.addEventListener('input', (e) => { if (e.target.id === 'chatInput') ui.chatDraft = e.target.value; });
+  document.addEventListener('input', (e) => { if (e.target.id === 'chatInput') ui.chatDraft = e.target.value; if (e.target.id === 'orderInput') ui.orderDraft = e.target.value; });
+  document.addEventListener('keydown', (e) => { if (e.target.id === 'orderInput' && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); issueOrder(); } });
   document.addEventListener('keydown', (e) => { if (e.target.id === 'chatInput' && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); chatSend(); } });
 }
 

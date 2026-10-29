@@ -110,3 +110,5 @@ textarea { width: 100%; min-height: 120px; font: 12px/1.4 ui-monospace, monospac
 .chatrow input { flex: 1 1 200px; min-width: 0; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); }
 .talklist .talkrow { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .moment.meet { line-height: 1.8; }
+.chip.on { border-color: var(--accent); }
+.skillset { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 4px; }
