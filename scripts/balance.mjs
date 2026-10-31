@@ -1,8 +1,9 @@
 // 批次平衡模擬：node scripts/balance.mjs [種子數]
 // 每個種子連跑 5 次遠征：前幾次是「灰燼瀰漫」，擊敗 Boss 後世界轉為「餘燼回流」。
 import * as G from '../src/game.js';
-import { ENCOUNTER_EVENTS } from '../src/data.js';
+import { ENCOUNTER_EVENTS, GACHA } from '../src/data.js';
 import { lootStats } from './lootstats.mjs';
+import { gemStats } from './gemstats.mjs';
 const N = +(process.argv[2] || 200);
 const RUNS = 5;
 const res = {};
@@ -10,11 +11,13 @@ for (let r = 1; r <= RUNS; r++) res['run' + r] = { cleared: 0, defeat: 0, retrea
 const ember = { cleared: 0, defeat: 0, retreat: 0 };
 const defeatFloor = [0, 0, 0];
 const lootSamples = [];
+const gemSamples = [];
 let battles = 0, rounds = 0, phase2 = 0, bossFights = 0;
 for (let s = 1; s <= N; s++) {
   const g = G.newGame(s * 7919);
   for (let run = 1; run <= RUNS; run++) {
     const wasEmber = G.dungeonState(g) === 'ember_return';
+    const gemsBefore = g.gems, killsBefore = g.flags.boss_kills || 0;
     G.startExpedition(g);
     const lootRef = g.expedition.loot; // 同一個陣列會一路累積到遠征結束
     let floorAt = 0;
@@ -31,6 +34,7 @@ for (let s = 1; s <= N; s++) {
     }
     lootSamples.push({ group: '第' + run + '次', loot: lootRef });
     if (wasEmber) lootSamples.push({ group: '餘燼回流', loot: lootRef });
+    gemSamples.push({ seed: s, run, gems: g.gems - gemsBefore, bossFirst: killsBefore === 0 && (g.flags.boss_kills || 0) > 0 });
     res['run' + run][g.lastExpeditionResult]++;
     if (wasEmber) ember[g.lastExpeditionResult]++;
     if (g.lastExpeditionResult === 'defeat') defeatFloor[floorAt]++;
@@ -44,3 +48,6 @@ console.log(JSON.stringify({ N, ...res, clearRate: Object.fromEntries(Object.ent
 
 console.log('詞綴掉落統計（每次遠征取得，含全滅遺失者）：');
 console.log(JSON.stringify(lootStats(lootSamples)));
+
+console.log('寶石收入統計（每次遠征帶回；全滅遺失者為 0；累計＝到該次為止每個種子的平均）：');
+console.log(JSON.stringify(gemStats(gemSamples, GACHA.cost)));

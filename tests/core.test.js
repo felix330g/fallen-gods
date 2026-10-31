@@ -4,9 +4,10 @@ import { createBattle, stepRound, runAuto, verifyRecord, replay, validateCommand
 import { computeStats, simpleLog, detailedLog, allEvents } from '../src/report.js';
 import { deriveMemories, verifyMemories } from '../src/memory.js';
 import { buildMoments, verifyMoments } from '../src/narration.js';
-import { CHARACTERS, ENEMIES, ENCOUNTER_EVENTS } from '../src/data.js';
+import { CHARACTERS, ENEMIES, ENCOUNTER_EVENTS, GEMS } from '../src/data.js';
 import * as G from '../src/game.js';
 import { lootStats } from '../scripts/lootstats.mjs';
+import { gemStats } from '../scripts/gemstats.mjs';
 
 const mk = (seed, opts = {}) => createBattle({
   battleId: 't' + seed, seed, pairLevels: opts.pairLevels || {},
@@ -1001,4 +1002,61 @@ test('命令獎勵：依命令守護且對方撐到最後 → 兩人熟練度與
   const bad = JSON.parse(G.serialize(g)); bad.orderBond = {};
   assert.throws(() => G.deserialize(JSON.stringify(bad)), /羈絆/);
   assert.equal(ORDER_RULES.entrustedDef, G.ORDER_REWARD.entrustedDef);
+});
+
+// 逐場模擬：回傳每次遠征的結果與寶石樣本（與 balance.mjs 同一套流程）
+function simGems(seeds, runs) {
+  const samples = [], outcomes = [];
+  for (const s of seeds) {
+    const g = G.newGame(s * 7919);
+    for (let run = 1; run <= runs; run++) {
+      const before = g.gems, kills = g.flags.boss_kills || 0;
+      G.startExpedition(g);
+      while (g.expedition) {
+        const ex = g.expedition;
+        for (const id of g.party) if (g.potions > 0 && ex.hp[id] < G.effectiveStats(g, id).hp * 0.4) G.usePotion(g, id);
+        let idx = ex.choices.findIndex((c) => c.type !== 'battle'); if (idx < 0) idx = 0;
+        const r = G.chooseRoute(g, idx);
+        if (r === 'battle') G.autoBattle(g);
+        else if (r === 'event') { const ch = ENCOUNTER_EVENTS[g.expedition.pending.event_id].choices.find((c) => G.eventChoiceAllowed(g, c)); G.resolveEvent(g, ch.id); }
+      }
+      outcomes.push(g.lastExpeditionResult);
+      samples.push({ seed: s, run, gems: g.gems - before, bossFirst: kills === 0 && (g.flags.boss_kills || 0) > 0 });
+      for (const it of [...g.inventory]) for (const id of g.party) { try { G.equip(g, id, it); break; } catch {} }
+      while (g.gold >= 20 && g.potions < 3) G.buyPotion(g);
+    }
+  }
+  return { samples, outcomes };
+}
+
+test('寶石統計：表格數字＝逐場加總', () => {
+  const { samples } = simGems([1, 2, 3, 4, 5, 6], 3);
+  const cost = { recruit: 5, skill: 3 };
+  const t = gemStats(samples, cost);
+  const sum = (run, f) => samples.filter((x) => x.run <= run).reduce((a, x) => a + f(x), 0);
+  for (const run of [1, 2, 3]) {
+    const row = t['第' + run + '次'], mine = samples.filter((x) => x.run === run);
+    assert.equal(row.expeditions, 6);
+    assert.equal(row.avgGems, +(mine.reduce((a, x) => a + x.gems, 0) / 6).toFixed(2));
+    assert.equal(row.bossFirstRate, Math.round(mine.filter((x) => x.bossFirst).length * 100 / 6));
+    assert.equal(row.cumGems, +(sum(run, (x) => x.gems) / 6).toFixed(2));
+    assert.equal(row.cumRecruit, +(sum(run, (x) => x.gems) / 6 / 5).toFixed(2));
+    assert.equal(row.cumSkill, +(sum(run, (x) => x.gems) / 6 / 3).toFixed(2));
+  }
+  // 手算小例子
+  const mini = gemStats([{ seed: 1, run: 1, gems: 5, bossFirst: true }, { seed: 2, run: 1, gems: 0, bossFirst: false }, { seed: 1, run: 2, gems: 2, bossFirst: false }, { seed: 2, run: 2, gems: 1, bossFirst: false }], cost);
+  assert.deepEqual(mini['第1次'], { expeditions: 2, avgGems: 2.5, bossFirstRate: 50, cumGems: 2.5, cumRecruit: 0.5, cumSkill: 0.83 });
+  assert.equal(mini['第2次'].cumGems, 4);
+});
+
+test('寶石亂數不影響攻略結果：寶石機率歸零，勝敗序列相同', () => {
+  const seeds = [1, 2, 3, 4, 5, 6, 7, 8];
+  const a = simGems(seeds, 3);
+  const saved = { ...GEMS };
+  Object.assign(GEMS, { battleChance: 0, bossFirst: 0, bossRepeat: 0 });
+  let b;
+  try { b = simGems(seeds, 3); } finally { Object.assign(GEMS, saved); }
+  assert.deepEqual(a.outcomes, b.outcomes);
+  assert.ok(b.samples.every((x) => x.gems === 0));
+  assert.ok(a.samples.some((x) => x.gems > 0));
 });
