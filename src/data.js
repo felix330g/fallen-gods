@@ -1,5 +1,5 @@
 // 遊戲資料。所有角色與數值皆為「垂直切片測試用」，非正式設定。
-export const RULES_VERSION = '0.8.0';
+export const RULES_VERSION = '0.8.1';
 
 export const SKILLS = {
   arrow_shot: { id: 'arrow_shot', name: '射擊', kind: 'attack', target: 'enemy', mult: 100, cd: 0, desc: '基本攻擊（100% 攻擊）' },

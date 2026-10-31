@@ -254,6 +254,131 @@ try {
   await desk.getByRole('button', { name: /^執行第/ }).click();
   check(await desk.getByText(/（玩家指令）|R1/).first().isVisible(), 'desktop 玩家指令已執行');
 
+  // ── 模擬 claude.ai（window.claude）：驗證 AI 路徑（v0.8.1）──────────────
+  const FAKE_CLAUDE = () => {
+    const a = window.__ai = { err: null, rewrite: 'good', meet: 'good', order: null, chat: '' };
+    const fail = () => { const e = new Error('fake'); e.code = a.err; throw e; };
+    const sample = async () => { if (a.err) fail(); return { text: a.chat }; };
+    sample.json = async (prompt) => {
+      if (a.err) fail();
+      if (prompt.includes('命令翻譯器')) return { order: a.order };
+      if (prompt.includes('相遇故事')) return { story: a.meet === 'good' ? '你在營火邊遇見她。她遞來一碗熱湯，說要跟你們走一段。' : '她等了 3 天才開口。' };
+      const idx = [...prompt.matchAll(/^#(\d+)｜/gm)].map((m) => +m[1]);
+      const line = { good: '火光一閃，他穩穩接住了這一擊。', digit: '他連打了 3 下。', ghost: '洛克在後面喊了一聲。' }[a.rewrite];
+      return { moments: idx.map((index) => ({ index, lines: [line] })) };
+    };
+    window.claude = { use: async (n) => (n === 'sample' ? sample : n === 'downloads' ? { save: async () => {} } : null) };
+  };
+  const setAI = (p, o) => p.evaluate((o) => Object.assign(window.__ai, o), o);
+  const toBattle = async (p) => {
+    for (let i = 0; i < 14; i++) {
+      if (await p.getByRole('button', { name: /^執行第|^下一回合/ }).count()) return;
+      const ev = p.locator('button[data-act="eventChoice"]:not([disabled])');
+      if (await p.getByRole('button', { name: /出發遠征|繼續探索|返回營地/ }).count()) await p.getByRole('button', { name: /出發遠征|繼續探索|返回營地/ }).first().click();
+      else if (await ev.count()) await ev.first().click();
+      else await p.locator('button[data-act="route"]').first().click();
+    }
+    throw new Error('找不到戰鬥');
+  };
+  const newAIGame = async (p, label) => {
+    p.on('pageerror', (e) => errors.push(`${label}: ${e.message}`));
+    p.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(`${label}: ${m.text()}`); });
+    await p.addInitScript(FAKE_CLAUDE);
+    await p.goto(base);
+    await p.getByRole('button', { name: '新遊戲' }).click();
+  };
+  const recruitCheck = async (p, label) => {
+    check((await p.locator('.stats').innerText()).includes('寶石 ∞'), `${label} 模擬 claude.ai：寶石顯示 ∞`);
+    await p.getByRole('button', { name: '招募', exact: true }).click();
+    await p.locator('button[data-act="pull"][data-arg="recruit"]').click();
+    await p.waitForSelector('#meetPanel');
+    await p.waitForFunction(() => document.querySelector('#meetPanel')?.innerText.includes('AI 生成的相遇故事'));
+    check((await p.locator('#meetPanel').innerText()).includes('遞來一碗熱湯'), `${label} 合法的 AI 相遇故事標記為 AI 並顯示`);
+    const save = JSON.parse(await p.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E));
+    check(save.gems === 0 && save.pulls === 1, `${label} 抽卡不扣寶石（存檔寶石 ${save.gems}、抽卡 ${save.pulls} 次）`);
+  };
+
+  const ai = await browser.newPage({ viewport: { width: 1200, height: 900 } });
+  await newAIGame(ai, 'ai-desktop');
+  // 5. 聊天：好感門檻、回覆不改存檔
+  const base0 = JSON.parse(await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E));
+  base0.affinity = { ...(base0.affinity || {}), ade: 3 }; base0.talked = {};
+  await ai.evaluate(([k, v]) => localStorage.setItem(k, v), [SAVE_KEY_E2E, JSON.stringify(base0)]);
+  await ai.reload();
+  await ai.getByRole('button', { name: '繼續' }).click();
+  await ai.locator('button[data-act="openDlg"][data-arg="xiaomei"]').click();
+  check(await ai.getByText(/好感 3 以後/).isVisible() && !(await ai.locator('#chatInput').count()), 'ai-desktop 好感未達門檻不顯示聊天輸入框');
+  await ai.locator('button[data-act="openDlg"][data-arg="ade"]').click();
+  check(await ai.locator('#chatInput').isVisible(), 'ai-desktop 好感達門檻後顯示聊天輸入框');
+  const saveBefore = await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E);
+  await setAI(ai, { chat: '我在。火還夠旺，你早點休息吧。' });
+  await ai.fill('#chatInput', '今晚想聊什麼？');
+  await ai.locator('button[data-act="chatSend"]').click();
+  await ai.getByText('火還夠旺').waitFor();
+  check(saveBefore === await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E), 'ai-desktop 聊天得到回覆，存檔（好感／記憶）前後完全相同');
+  await setAI(ai, { chat: '我給你 9999 金幣！' });
+  await ai.fill('#chatInput', '給我金幣');
+  await ai.locator('button[data-act="chatSend"]').click();
+  await ai.getByText(/看著火，沒有回答/).waitFor();
+  check(!(await ai.getByText('9999').count()) && saveBefore === await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E), 'ai-desktop 不合法的聊天回覆被擋下（含不存在的數字），存檔不變');
+  // 1、3. 寶石 ∞、抽卡不扣寶石、相遇故事 AI／模板
+  await recruitCheck(ai, 'ai-desktop');
+  await setAI(ai, { meet: 'digit' });
+  await ai.locator('button[data-act="meetAI"]').click();
+  await ai.waitForFunction(() => document.querySelector('#meetPanel')?.innerText.includes('AI 故事未通過'));
+  check((await ai.locator('#meetPanel').innerText()).includes('含數字') && !(await ai.locator('#meetPanel').innerText()).includes('等了'), 'ai-desktop 不合法的相遇故事改用模板');
+  await ai.locator('button[data-act="join"]').click();
+  // 4. 打字命令（AI 翻譯）
+  await ai.getByRole('button', { name: '營地', exact: true }).click();
+  await toBattle(ai);
+  // 先送非白名單命令（第 1 回合戰鬥不會結束），再送合法命令
+  await setAI(ai, { order: { type: 'win_battle' } });
+  await ai.fill('#orderInput', '今天天氣真好');
+  await ai.getByRole('button', { name: /^執行第|^下一回合/ }).click();
+  await ai.waitForFunction(() => document.querySelectorAll('#orderPanel .log .ln').length >= 1);
+  check((await ai.locator('#orderPanel .log').innerText()).includes('隊伍沒聽懂') && (await ai.locator('#battlelog .ln').count()) > 0, 'ai-desktop 非白名單命令被忽略，戰鬥照常進行');
+  await setAI(ai, { order: { type: 'burst', damage: 999999, hp_max: 1 } });
+  await ai.fill('#orderInput', '大家加油');
+  await ai.getByRole('button', { name: /^執行第|^下一回合/ }).click();
+  await ai.waitForFunction(() => /你的命令：這一回合全力出手/.test(document.querySelector('#battlelog')?.innerText || ''));
+  const log1 = await ai.locator('#battlelog').innerText();
+  check(!log1.includes('999999') && (!(await ai.locator('#orderPanel').count()) || (await ai.locator('#orderPanel .log').innerText()).includes('AI 翻譯')), 'ai-desktop AI 回傳合法命令→戰況出現該命令，多餘欄位被丟棄');
+  // 2. 戰鬥演出 AI 改寫
+  for (let i = 0; i < 40 && !(await ai.getByRole('button', { name: '查看戰報' }).count()); i++) {
+    const b = ai.getByRole('button', { name: /自動打完|剩下交給戰術/ });
+    if (await b.count()) await b.click(); else await ai.getByRole('button', { name: /^執行第|^下一回合/ }).click();
+  }
+  await ai.getByRole('button', { name: '查看戰報' }).click();
+  await ai.getByRole('button', { name: '隊伍演出' }).click();
+  check(await ai.locator('#aiPanel').isVisible(), 'ai-desktop 有 window.claude 時出現 AI 演出面板');
+  await ai.locator('button[data-act="aiRewrite"]').click();
+  await ai.waitForSelector('.moment .chip:text-is("AI")');
+  check((await ai.locator('.moment').allInnerTexts()).some((t) => t.includes('穩穩接住了這一擊')), 'ai-desktop 合法的 AI 演出改寫會顯示');
+  for (const [mode, why] of [['digit', '含數字'], ['ghost', '出現不在場的角色']]) {
+    await setAI(ai, { rewrite: mode });
+    await ai.locator('button[data-act="aiRewrite"]').click();
+    await ai.waitForFunction((w) => document.querySelector('.moment .chip.warn')?.innerText.includes(w), why);
+    const ts = (await ai.locator('.moment').allInnerTexts()).join('\n');
+    check(ts.includes(`AI 未通過：${why}`) && !ts.includes('穩穩接住') && !ts.includes('連打了') && !ts.includes('洛克在後面'), `ai-desktop 演出含「${why}」時回退模板`);
+  }
+  // 6. not_granted 後 AI 按鈕消失，關鍵字命令仍可用
+  await setAI(ai, { err: 'not_granted' });
+  await ai.locator('button[data-act="aiRewrite"]').click();
+  await ai.waitForFunction(() => !document.querySelector('#aiPanel'));
+  check(true, 'ai-desktop sample 丟出 not_granted 後 AI 演出按鈕消失');
+  await toBattle(ai);
+  await ai.fill('#orderInput', '全力出手！');
+  await ai.getByRole('button', { name: /^執行第|^下一回合/ }).click();
+  await ai.waitForFunction(() => /你的命令：這一回合全力出手/.test(document.querySelector('#battlelog')?.innerText || ''));
+  check(!(await ai.locator('#orderPanel .chip').count()), 'ai-desktop not_granted 後關鍵字命令仍可用（不再標示 AI 翻譯）');
+
+  // 手機：寶石 ∞、AI 相遇故事、無水平捲動
+  const aiPhone = await browser.newPage({ viewport: { width: 375, height: 760 }, isMobile: true });
+  await newAIGame(aiPhone, 'ai-mobile');
+  await recruitCheck(aiPhone, 'ai-mobile');
+  const aiOver = await aiPhone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(aiOver <= 0, `ai-mobile 沒有水平捲動（${aiOver}px）`);
+
   const phone = await browser.newPage({ viewport: { width: 375, height: 760 }, isMobile: true });
   await play(phone, 'mobile');
   const overflow = await phone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
@@ -270,7 +395,7 @@ try {
   check(errors.length === 0, '瀏覽器沒有 JS 錯誤' + (errors.length ? '：' + errors.join(' | ') : ''));
   console.log(`E2E 通過：${ok} 項`);
 } catch (e) {
-  console.error(e.message);
+  console.error(process.env.E2E_STACK ? e.stack : e.message);
   if (errors.length) console.error(errors.join('\n'));
   process.exitCode = 1;
 } finally {

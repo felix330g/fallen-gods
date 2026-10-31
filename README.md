@@ -4,6 +4,11 @@
 
 純前端、零依賴、零建置也能跑；所有角色與數值皆為**測試用**，非正式設定。
 
+## v0.8.1 新增
+- E2E 新增「模擬 claude.ai」情境：用 `page.addInitScript` 注入假的 `window.claude`（`sample`、`sample.json`、`downloads`），涵蓋寶石 ∞／抽卡不扣寶石、AI 相遇故事（合法／不合法）、AI 演出改寫與回退、打字命令（多餘欄位丟棄、非白名單忽略）、聊天（好感門檻、存檔不變）、`not_granted` 後 AI 消失但關鍵字命令可用；手機版驗證一項。一般網頁的既有 E2E 不變。
+- `npm run balance` 新增寶石收入統計（`scripts/gemstats.mjs`，只量測）。
+- 同步 `docs/design`（10/29 使用者決定）。遊戲行為與數值不變。
+
 ## v0.8.0 新增
 
 - **招募**顯示剩餘可相遇的人數（含各稀有度）。
