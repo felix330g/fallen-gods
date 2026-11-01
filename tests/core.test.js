@@ -8,6 +8,7 @@ import { CHARACTERS, ENEMIES, ENCOUNTER_EVENTS, GEMS } from '../src/data.js';
 import * as G from '../src/game.js';
 import { lootStats } from '../scripts/lootstats.mjs';
 import { gemStats } from '../scripts/gemstats.mjs';
+import { withTimeout, AI_TIMEOUT_MS, ORDER_AI_TIMEOUT_MS } from '../src/ai.js';
 
 const mk = (seed, opts = {}) => createBattle({
   battleId: 't' + seed, seed, pairLevels: opts.pairLevels || {},
@@ -1059,4 +1060,34 @@ test('寶石亂數不影響攻略結果：寶石機率歸零，勝敗序列相�
   assert.deepEqual(a.outcomes, b.outcomes);
   assert.ok(b.samples.every((x) => x.gems === 0));
   assert.ok(a.samples.some((x) => x.gems > 0));
+});
+
+// ── v0.8.2 AI 逾時 ──
+test('withTimeout：及時回傳正常結果', async () => {
+  assert.equal(await withTimeout(async () => 'ok', 50), 'ok');
+});
+test('withTimeout：逾時丟 timeout 並 abort 內部 signal，晚到的結果被忽略', async () => {
+  let sig, late;
+  const p = withTimeout((s) => { sig = s; return new Promise((r) => { late = r; }); }, 10);
+  await assert.rejects(p, { code: 'timeout' });
+  assert.equal(sig.aborted, true);
+  late('晚到'); // 不應有任何影響（不丟錯、不改變已拒絕的結果）
+  await new Promise((r) => setTimeout(r, 5));
+});
+test('withTimeout：外部 abort 丟 cancelled；已 abort 的 signal 直接 cancelled', async () => {
+  const ctl = new AbortController();
+  const p = withTimeout(() => new Promise(() => {}), 1000, ctl.signal);
+  ctl.abort();
+  await assert.rejects(p, { code: 'cancelled' });
+  await assert.rejects(withTimeout(async () => 1, 1000, ctl.signal), { code: 'cancelled' });
+});
+test('withTimeout：fn 丟出的錯誤原樣傳回，注入計時器可控', async () => {
+  await assert.rejects(withTimeout(async () => { throw Object.assign(new Error('x'), { code: 'rate_limited' }); }, 50), { code: 'rate_limited' });
+  let fire; const cleared = [];
+  const timers = { setTimeout: (f) => { fire = f; return 7; }, clearTimeout: (t) => cleared.push(t) };
+  const p = withTimeout(() => new Promise(() => {}), 99999, null, timers);
+  fire();
+  await assert.rejects(p, { code: 'timeout' });
+  assert.deepEqual(cleared, [7]);
+  assert.ok(AI_TIMEOUT_MS === 20000 && ORDER_AI_TIMEOUT_MS === 8000);
 });

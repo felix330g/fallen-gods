@@ -5,7 +5,7 @@ import { parseOrderText, buildOrderPrompt, shapeOrder, ackLine, ORDER_INPUT_MAX 
 import * as G from './game.js';
 import { summary, simpleLog, detailedLog, filterDetailedLog, filterOptions, computeStats, hpCurve, skillLabel, orderText } from './report.js';
 import { TALK_INTENTS, PAST_TIERS, AFFINITY_MAX, TOPICS, followLine, talkLine } from './talk.js';
-import { buildPrompt, validateAI, aiEligible, MEET_TEMPLATES, buildMeetPrompt, validateMeet, CHAT_AFFINITY, CHAT_INPUT_MAX, buildChatTurns, validateChat } from './ai.js';
+import { buildPrompt, validateAI, aiEligible, MEET_TEMPLATES, buildMeetPrompt, validateMeet, CHAT_AFFINITY, CHAT_INPUT_MAX, buildChatTurns, validateChat, withTimeout, AI_TIMEOUT_MS, ORDER_AI_TIMEOUT_MS, AI_DISABLED_CODES } from './ai.js';
 
 const SAVE_KEY = 'fallen-gods-save-v1';
 const ui = { confirm: null, exportText: null, view: 'title', tab: 'camp', game: null, battle: null, cmds: {}, reportIdx: -1, rtab: 'summary', detailed: false, actorFilter: '', lf: { skill: '', type: '', status: '', turn: '' }, idFilter: null, hl: null, msg: null, err: null, exp: null, invSort: 'default', fromExpedition: false, talk: null, sample: null, ai: {}, aiCtl: null, testMode: false, gacha: null, meet: null, dlg: null, chatDraft: '', orderDraft: '', orderBusy: false, orderNotes: [] };
@@ -114,11 +114,12 @@ async function chatSend() {
   d.busy = true; render();
   let reply, ai = false, note;
   try {
-    const { text } = await ui.sample(buildChatTurns(id, ctx, d.turns), { signal: ctl.signal, cache: false, modelTier: 'quick' });
+    const turns = buildChatTurns(id, ctx, d.turns);
+    const { text } = await withTimeout((sig) => ui.sample(turns, { signal: sig, cache: false, modelTier: 'quick' }), AI_TIMEOUT_MS, ctl.signal);
     const v = validateChat(text, id, [...knownPast, ...memories]);
     if (v.text) { reply = v.text; ai = true; } else { reply = CHAT_FALLBACK(c.name); note = `AI 回覆未通過：${v.why}`; }
   } catch (e) {
-    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    if (AI_DISABLED_CODES.includes(e?.code)) ui.sample = null;
     reply = CHAT_FALLBACK(c.name); note = e?.code === 'cancelled' ? '已停止' : (AI_ERRORS[e?.code] ?? 'AI 暫時無法使用。');
   }
   if (ui.dlg !== d) return;
@@ -166,11 +167,12 @@ async function meetAI() {
   if (!id || !ui.sample) return;
   ui.meet = { id, status: 'loading' }; render();
   try {
-    const out = await ui.sample.json(buildMeetPrompt(g, id), { cache: false });
+    const mp = buildMeetPrompt(g, id);
+    const out = await withTimeout((sig) => ui.sample.json(mp, { signal: sig, cache: false }), AI_TIMEOUT_MS);
     const v = validateMeet(out, g, id);
     ui.meet = v.story ? { id, status: 'done', story: v.story } : { id, status: 'done', why: v.why };
   } catch (e) {
-    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    if (AI_DISABLED_CODES.includes(e?.code)) ui.sample = null;
     ui.meet = { id, status: 'done', why: AI_ERRORS[e?.code] ?? 'AI 暫時無法使用' };
   }
   render();
@@ -360,10 +362,11 @@ async function issueOrder() {
   let order = null, via = null;
   if (ui.sample) {
     try {
-      const o = shapeOrder(await ui.sample.json(buildOrderPrompt(said, st), { modelTier: 'quick', cache: false }));
+      const op = buildOrderPrompt(said, st);
+      const o = shapeOrder(await withTimeout((sig) => ui.sample.json(op, { signal: sig, modelTier: 'quick', cache: false }), ORDER_AI_TIMEOUT_MS));
       if (o && !validateOrder(st, o)) { order = o; via = 'AI'; }
     } catch (e) {
-      if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+      if (AI_DISABLED_CODES.includes(e?.code)) ui.sample = null;
     }
   }
   if (!order) { order = parseOrderText(said, st); via = order ? '關鍵字' : null; }
@@ -466,7 +469,7 @@ function repMoments(rep) {
     }).join('')}</div>`;
 }
 
-const AI_ERRORS = { not_granted: '你沒有允許這個頁面使用 Claude，AI 演出已關閉。', sampling_disabled: '這個帳號不能使用 Claude。', rate_limited: '呼叫太頻繁或額度用完，請稍後再試。', session_expired: '請重新登入 claude.ai。', refused: 'Claude 拒絕了這次請求，保留模板。', invalid_json: 'AI 回覆格式錯誤，保留模板。可以再試一次。' };
+const AI_ERRORS = { not_granted: '你沒有允許這個頁面使用 Claude，AI 演出已關閉。', sampling_disabled: '這個帳號不能使用 Claude。', rate_limited: '呼叫太頻繁或額度用完，請稍後再試。', session_expired: '請重新登入 claude.ai。', refused: 'Claude 拒絕了這次請求，保留模板。', timeout: 'AI 等太久沒有回應，保留模板。', invalid_json: 'AI 回覆格式錯誤，保留模板。可以再試一次。' };
 async function aiRewrite() {
   const idx = ui.reportIdx, rep = ui.game.reports[idx];
   const { prompt, items } = buildPrompt(rep.moments, rep.record);
@@ -475,11 +478,11 @@ async function aiRewrite() {
   ui.ai[idx] = { status: 'loading', prompt };
   render();
   try {
-    const out = await ui.sample.json(prompt, { signal: ctl.signal, cache: false });
+    const out = await withTimeout((sig) => ui.sample.json(prompt, { signal: sig, cache: false }), AI_TIMEOUT_MS, ctl.signal);
     const { ok, rejected } = validateAI(out, items, rep.record);
     ui.ai[idx] = { status: 'done', prompt, results: ok, rejected };
   } catch (e) {
-    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'].includes(e?.code)) ui.sample = null;
+    if (AI_DISABLED_CODES.includes(e?.code)) ui.sample = null;
     ui.ai[idx] = { status: 'error', prompt, error: e?.code === 'cancelled' ? null : (AI_ERRORS[e?.code] ?? 'AI 暫時無法使用，保留模板。') };
   }
   if (ui.aiCtl === ctl) ui.aiCtl = null;

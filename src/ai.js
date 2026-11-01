@@ -203,3 +203,34 @@ export function validateChat(text, id, facts = []) {
   if ((t.match(/[0-9０-９]+/g) || []).some((d) => !known.includes(d))) return { why: '含不存在的數字' };
   return { text: t };
 }
+
+// ── 逾時與回退（v0.8.2）──────────────────────────────────
+// 逾時秒數是測試值（待使用者決定）。
+export const AI_TIMEOUT_MS = 20000;       // 演出、相遇、聊天
+export const ORDER_AI_TIMEOUT_MS = 8000;  // 戰鬥命令翻譯
+// 這些錯誤碼代表這個頁面不能用 AI：之後不再顯示 AI 按鈕
+export const AI_DISABLED_CODES = ['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed'];
+const codeErr = (code) => Object.assign(new Error(code), { code });
+
+/**
+ * 執行 fn(signal)，最多等 ms 毫秒。逾時：abort 內部 signal 並丟 code 'timeout'；
+ * 外部 signal 被 abort：丟 'cancelled'。無論 fn 之後是否才回應，晚到的結果一律忽略。
+ * timers 可注入（測試用）。
+ */
+export function withTimeout(fn, ms, outer, timers = { setTimeout, clearTimeout }) {
+  return new Promise((resolve, reject) => {
+    const ctl = new AbortController();
+    let done = false, t = null, onOuter = null;
+    const finish = (f, v) => {
+      if (done) return;
+      done = true; timers.clearTimeout(t);
+      outer?.removeEventListener?.('abort', onOuter);
+      f(v);
+    };
+    if (outer?.aborted) return finish(reject, codeErr('cancelled'));
+    t = timers.setTimeout(() => { ctl.abort(); finish(reject, codeErr('timeout')); }, ms);
+    onOuter = () => { ctl.abort(); finish(reject, codeErr('cancelled')); };
+    outer?.addEventListener?.('abort', onOuter);
+    Promise.resolve().then(() => fn(ctl.signal)).then((v) => finish(resolve, v), (e) => finish(reject, e));
+  });
+}

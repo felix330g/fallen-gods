@@ -258,8 +258,10 @@ try {
   const FAKE_CLAUDE = () => {
     const a = window.__ai = { err: null, rewrite: 'good', meet: 'good', order: null, chat: '' };
     const fail = () => { const e = new Error('fake'); e.code = a.err; throw e; };
-    const sample = async () => { if (a.err) fail(); return { text: a.chat }; };
+    const sample = async () => { if (a.hang) return new Promise(() => {}); if (a.err) fail(); return { text: a.chat }; };
+    const hang = () => new Promise(() => {});
     sample.json = async (prompt) => {
+      if (a.hang) return hang();
       if (a.err) fail();
       if (prompt.includes('命令翻譯器')) return { order: a.order };
       if (prompt.includes('相遇故事')) return { story: a.meet === 'good' ? '你在營火邊遇見她。她遞來一碗熱湯，說要跟你們走一段。' : '她等了 3 天才開口。' };
@@ -284,6 +286,7 @@ try {
     p.on('pageerror', (e) => errors.push(`${label}: ${e.message}`));
     p.on('console', (m) => { if (m.type() === 'error' && !m.text().startsWith('Failed to load resource')) errors.push(`${label}: ${m.text()}`); });
     await p.addInitScript(FAKE_CLAUDE);
+    await p.clock.install();
     await p.goto(base);
     await p.getByRole('button', { name: '新遊戲' }).click();
   };
@@ -321,12 +324,27 @@ try {
   await ai.locator('button[data-act="chatSend"]').click();
   await ai.getByText(/看著火，沒有回答/).waitFor();
   check(!(await ai.getByText('9999').count()) && saveBefore === await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E), 'ai-desktop 不合法的聊天回覆被擋下（含不存在的數字），存檔不變');
+  await setAI(ai, { hang: true });
+  await ai.fill('#chatInput', '還在嗎？');
+  await ai.locator('button[data-act="chatSend"]').click();
+  await ai.waitForFunction(() => document.querySelector('#chatInput')?.disabled || true);
+  await ai.clock.fastForward(21000);
+  await ai.waitForFunction(() => (document.body.innerText.match(/看著火，沒有回答/g) || []).length >= 2);
+  check(await ai.locator('#chatInput').isEnabled() && saveBefore === await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E), 'ai-desktop (c) 聊天逾時→後備回覆、輸入框恢復、存檔字串不變');
+  await setAI(ai, { hang: false });
   // 1、3. 寶石 ∞、抽卡不扣寶石、相遇故事 AI／模板
   await recruitCheck(ai, 'ai-desktop');
   await setAI(ai, { meet: 'digit' });
   await ai.locator('button[data-act="meetAI"]').click();
   await ai.waitForFunction(() => document.querySelector('#meetPanel')?.innerText.includes('AI 故事未通過'));
   check((await ai.locator('#meetPanel').innerText()).includes('含數字') && !(await ai.locator('#meetPanel').innerText()).includes('等了'), 'ai-desktop 不合法的相遇故事改用模板');
+  await setAI(ai, { hang: true });
+  await ai.locator('button[data-act="meetAI"]').click();
+  check(await ai.locator('button[data-act="join"]').isDisabled(), 'ai-desktop 相遇 AI 等待中入隊按鈕暫時停用');
+  await ai.clock.fastForward(21000);
+  await ai.waitForFunction(() => document.querySelector('#meetPanel')?.innerText.includes('等太久沒有回應'));
+  check(await ai.locator('button[data-act="join"]').isEnabled() && (await ai.locator("#meetPanel").innerText()).includes("改用模板"), 'ai-desktop (a) 相遇故事逾時→模板、入隊按鈕恢復可按');
+  await setAI(ai, { hang: false });
   await ai.locator('button[data-act="join"]').click();
   // 4. 打字命令（AI 翻譯）
   await ai.getByRole('button', { name: '營地', exact: true }).click();
@@ -361,6 +379,18 @@ try {
     const ts = (await ai.locator('.moment').allInnerTexts()).join('\n');
     check(ts.includes(`AI 未通過：${why}`) && !ts.includes('穩穩接住') && !ts.includes('連打了') && !ts.includes('洛克在後面'), `ai-desktop 演出含「${why}」時回退模板`);
   }
+  // v0.8.2 逾時：假 sample 永不回應，用 clock 快轉
+  await setAI(ai, { hang: true });
+  await ai.locator('button[data-act="aiRewrite"]').click();
+  await ai.clock.fastForward(21000);
+  await ai.waitForFunction(() => document.body.innerText.includes('等太久沒有回應'));
+  const tsT = (await ai.locator('.moment').allInnerTexts()).join('\n');
+  check(!tsT.includes('穩穩接住') && await ai.locator('button[data-act="aiRewrite"]').count() > 0, 'ai-desktop (d) 演出改寫逾時→顯示原因、模板仍在、AI 按鈕仍在');
+  await setAI(ai, { hang: false, err: 'rate_limited' });
+  await ai.locator('button[data-act="aiRewrite"]').click();
+  await ai.waitForFunction(() => document.body.innerText.includes('呼叫太頻繁'));
+  check(await ai.locator('button[data-act="aiRewrite"]').count() > 0 && await ai.locator('#aiPanel').count() > 0, 'ai-desktop (e) rate_limited 顯示對應訊息、AI 按鈕仍在');
+  await setAI(ai, { err: null });
   // 6. not_granted 後 AI 按鈕消失，關鍵字命令仍可用
   await setAI(ai, { err: 'not_granted' });
   await ai.locator('button[data-act="aiRewrite"]').click();
@@ -376,6 +406,15 @@ try {
   const aiPhone = await browser.newPage({ viewport: { width: 375, height: 760 }, isMobile: true });
   await newAIGame(aiPhone, 'ai-mobile');
   await recruitCheck(aiPhone, 'ai-mobile');
+  await aiPhone.locator('button[data-act="join"]').click();
+  await aiPhone.getByRole('button', { name: '營地', exact: true }).click();
+  await toBattle(aiPhone);
+  await setAI(aiPhone, { hang: true });
+  await aiPhone.fill('#orderInput', '全力出手！');
+  await aiPhone.getByRole('button', { name: /^執行第|^下一回合/ }).click();
+  await aiPhone.clock.fastForward(9000);
+  await aiPhone.waitForFunction(() => /你的命令：這一回合全力出手/.test(document.querySelector('#battlelog')?.innerText || ''));
+  check(!(await aiPhone.getByText('隊伍正在理解你的命令').count()) && !(await aiPhone.locator('#orderInput:disabled').count()), 'ai-mobile (b) 命令翻譯逾時→改用關鍵字命令出現在戰況，不再卡在理解中、輸入框沒有被鎖住');
   const aiOver = await aiPhone.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   check(aiOver <= 0, `ai-mobile 沒有水平捲動（${aiOver}px）`);
 
