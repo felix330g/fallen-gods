@@ -202,7 +202,16 @@ try {
   check(await desk.getByText(/分解完成/).isVisible() && goldAfter === goldBefore + 35, `desktop 排序後分解需二次確認並得到金幣（${goldBefore}→${goldAfter}）`);
   check((await names()).join('|') === '生鏽短劍', 'desktop 分解後只剩正確的物品');
   // 招募與營火對話框（v0.7）：匯入有寶石的存檔
+  // 羈絆（v0.8.4，補驗收矩陣缺口）：偽造的【託付】（成功次數不足）匯入被拒，存檔不變
+  const forged = JSON.parse(exported); forged.orderBond = { 'ade|xiaomei': 1 }; forged.entrusted = ['ade|xiaomei'];
+  const saveBeforeForge = await desk.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E);
+  await desk.getByRole('button', { name: '設定' }).click();
+  await desk.locator('details summary').click();
+  await desk.locator('#pasteSave').fill(JSON.stringify(forged));
+  await desk.getByRole('button', { name: '匯入貼上的存檔' }).click();
+  check(await desk.getByText(/羈絆資料不合法/).isVisible() && saveBeforeForge === await desk.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E), 'desktop 偽造的託付（成功次數不足）匯入被拒、存檔不變');
   const rich = JSON.parse(exported); rich.gems = 20; rich.affinity = { ...(rich.affinity || {}), ade: 3 }; rich.talked = {};
+  rich.pairs = { 'ade|xiaomei': { xp: 60 }, 'ade|airin': { xp: 24 } }; rich.orderBond = { 'ade|xiaomei': 3, 'airin|xiaomei': 2 }; rich.entrusted = ['ade|xiaomei'];
   await desk.getByRole('button', { name: '設定' }).click();
   await desk.locator('details summary').click();
   await desk.locator('#pasteSave').fill(JSON.stringify(rich));
@@ -216,6 +225,13 @@ try {
   await desk.locator('button[data-act="join"]').click();
   await desk.getByRole('button', { name: '隊伍', exact: true }).click();
   check((await desk.locator('button[data-act="toggleParty"]').count()) === 5, 'desktop 新夥伴出現在隊伍名冊');
+  const pairRow = (a, b) => desk.locator('tr').filter({ hasText: new RegExp(`${a} × ${b}|${b} × ${a}`) });
+  check(await desk.locator('tr', { hasText: ' × ' }).count() === 10, 'desktop 熟練度表只列兩人一組（5 人＝10 對）');
+  const rAX = (await pairRow('阿德', '小梅').innerText()).replace(/\s+/g, ' ');
+  check(/Lv2 60\/100 託付/.test(rAX), `desktop 熟練度表顯示等級、熟練度與【託付】（${rAX}）`);
+  const rAA = (await pairRow('艾琳', '阿德').innerText()).replace(/\s+/g, ' ');
+  const rAM = (await pairRow('艾琳', '小梅').innerText()).replace(/\s+/g, ' ');
+  check(/Lv0 24\/100 —/.test(rAA) && /Lv0 0\/100 2\/3/.test(rAM), `desktop 未達門檻的搭檔顯示 Lv0 與託付進度（${rAA}／${rAM}）`);
   await desk.locator('details summary', { hasText: '相遇的那天' }).click();
   check(await desk.getByText(/模板故事（測試用）/).isVisible(), 'desktop 可以重讀相遇故事');
   await desk.getByRole('button', { name: '招募', exact: true }).click();
@@ -301,11 +317,15 @@ try {
     check(save.gems === 0 && save.pulls === 1, `${label} 抽卡不扣寶石（存檔寶石 ${save.gems}、抽卡 ${save.pulls} 次）`);
   };
 
+  const AI_SEED = 1; // 已驗證：第一場戰鬥第 1、2 回合都不會結束
   const ai = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await newAIGame(ai, 'ai-desktop');
   // 5. 聊天：好感門檻、回覆不改存檔
   const base0 = JSON.parse(await ai.evaluate((k) => localStorage.getItem(k), SAVE_KEY_E2E));
   base0.affinity = { ...(base0.affinity || {}), ade: 3 }; base0.talked = {};
+  // v0.8.4：固定種子。新遊戲種子取自 Date.now()，約 1/30 的種子會讓下面第一場戰鬥在第 1 回合就結束、
+  // 命令面板消失，造成 v0.8.3 記錄的 30 秒偶發逾時。可用 E2E_AI_SEED 換種子掃描。
+  base0.seed = +(process.env.E2E_AI_SEED || 0) || AI_SEED;
   await ai.evaluate(([k, v]) => localStorage.setItem(k, v), [SAVE_KEY_E2E, JSON.stringify(base0)]);
   await ai.reload();
   await ai.getByRole('button', { name: '繼續' }).click();
@@ -353,7 +373,8 @@ try {
   await setAI(ai, { order: { type: 'win_battle' } });
   await ai.fill('#orderInput', '今天天氣真好');
   await ai.getByRole('button', { name: /^執行第|^下一回合/ }).click();
-  await ai.waitForFunction(() => document.querySelectorAll('#orderPanel .log .ln').length >= 1);
+  await ai.waitForFunction(() => document.querySelectorAll('#orderPanel .log .ln').length >= 1 || /・結束/.test(document.body.innerText));
+  check(await ai.locator('#orderPanel').count() > 0, 'ai-desktop 固定種子的第一場戰鬥第 1 回合沒有結束（若失敗請換 AI_SEED）');
   check((await ai.locator('#orderPanel .log').innerText()).includes('隊伍沒聽懂') && (await ai.locator('#battlelog .ln').count()) > 0, 'ai-desktop 非白名單命令被忽略，戰鬥照常進行');
   await setAI(ai, { order: { type: 'burst', damage: 999999, hp_max: 1 } });
   await ai.fill('#orderInput', '大家加油');
