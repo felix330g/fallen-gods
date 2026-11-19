@@ -41,7 +41,7 @@ async function play(page, label) {
   check(await page.locator('#talkResult').isVisible(), `${label} 營火談話有回應`);
   check(await page.locator('button[data-act="talk"][data-arg="ade:recent"]').isDisabled(), `${label} 同一天不能再找同一人聊`);
   await page.getByRole('button', { name: '出發遠征' }).click();
-  let battles = 0, events = 0, safety = 0, ordered = false;
+  let battles = 0, events = 0, safety = 0, ordered = false, statusChecked = false;
   while (safety++ < 80) {
     const t = await page.locator('#app').innerText();
     if (t.includes('出發遠征')) break;
@@ -108,6 +108,25 @@ async function play(page, label) {
         await page.getByRole('button', { name: '隊伍演出' }).click();
         check(await page.locator('#aiPanel').count() === 0, `${label} 一般網頁不顯示 AI 演出（只在 claude.ai 託管頁出現）`);
       }
+      // 驗收矩陣「狀態」：第一場有狀態事件的戰鬥，用狀態篩選檢查詳細戰報的狀態行
+      // （單場約一半沒有狀態；模擬 300 個種子的第一次遠征全部至少有一場有）
+      if (!statusChecked) {
+        await page.getByRole('button', { name: '戰報', exact: true }).click();
+        if (await page.getByRole('button', { name: '切換到詳細' }).count()) await page.getByRole('button', { name: '切換到詳細' }).click();
+        const stSel = page.locator('select[data-arg="status"]');
+        if ((await stSel.locator('option').count()) > 1) {
+          statusChecked = true;
+          const total = await page.locator('.log .ln').count();
+          const stOpt = stSel.locator('option').nth(1);
+          const stName = (await stOpt.innerText()).trim();
+          await stSel.selectOption(await stOpt.getAttribute('value'));
+          const stLines = await page.locator('.log .ln').allInnerTexts();
+          check(stLines.length > 0 && stLines.length <= total && stLines.every((t) => t.includes(stName) && /狀態附加|狀態結束|淨化|傷害/.test(t)), `${label} 詳細戰報依狀態「${stName}」篩選（${stLines.length} 行，都含狀態名稱）`);
+          check(stLines.some((t) => /狀態附加/.test(t) && new RegExp(`${stName}（\\d+ 層，\\d+ 回合）`).test(t)), `${label} 狀態附加顯示層數與剩餘回合`);
+          await page.getByRole('button', { name: '清除篩選' }).click();
+          check((await page.locator('.log .ln').count()) === total, `${label} 清除狀態篩選後恢復`);
+        }
+      }
       await page.getByRole('button', { name: /繼續探索|返回營地/ }).click();
       continue;
     }
@@ -126,6 +145,7 @@ async function play(page, label) {
     throw new Error('卡住了：' + t.slice(0, 300));
   }
   check(battles >= 3, `${label} 完成遠征（${battles} 場戰鬥、${events} 次奇遇）`);
+  check(statusChecked, `${label} 遠征中至少一場戰鬥的詳細戰報有狀態事件並已檢查`);
   return battles;
 }
 
