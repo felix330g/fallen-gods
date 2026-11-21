@@ -84,13 +84,29 @@ async function play(page, label) {
         await skillSel.selectOption(skillOpt);
         const skLines = await page.locator('.log .ln').allInnerTexts();
         check(skLines.length > 0 && skLines.length < total && skLines.every((t) => t.includes(skillText) || /冷卻|命中|暴擊|傷害|護盾|治療|狀態|淨化|倒下|羈絆|階段/.test(t)), `${label} 詳細戰報依技能篩選`);
-        const turnTags = async () => (await page.locator('.log .ln .t').allInnerTexts()).map((t) => t.split('・')[0]);
+        // v0.8.6 收緊「篩選」列：用事件 id 比對集合，不只看文字
+        const lineIds = () => page.locator('.log .ln[id]').evaluateAll((els) => els.map((el) => el.id));
+        const skIds = await lineIds();
+        const skTurnNo = Number((await page.locator('.log .ln .t').first().innerText()).split('・')[0].slice(1));
+        const declLines = skLines.filter((t) => t.includes('宣告行動'));
+        check(declLines.length > 0 && declLines.every((t) => t.includes(`使用 ${skillText}`)), `${label} 技能篩選的宣告行動行都是「使用 ${skillText}」（${declLines.length} 行）`);
         await skillSel.selectOption('');
+        const allIds = await lineIds();
+        check(allIds.length === total && new Set(allIds).size === total && skIds.every((id) => allIds.includes(id)), `${label} 技能篩選結果是完整戰報的子集（事件 id 不重複）`);
+        const turnTags = async () => (await page.locator('.log .ln .t').allInnerTexts()).map((t) => t.split('・')[0]);
         const turnSel = page.locator('select[data-arg="turn"]');
         const turnVal = await turnSel.locator('option').last().getAttribute('value');
         await turnSel.selectOption(turnVal);
         const tt = await turnTags();
         check(tt.length > 0 && tt.every((t) => t === `R${turnVal}`), `${label} 詳細戰報依回合篩選`);
+        // 兩個條件同時選＝各自結果的交集（AND）；回合取該技能第一次出現的回合，交集必不為空
+        await turnSel.selectOption(String(skTurnNo));
+        const turnIds = await lineIds();
+        await skillSel.selectOption(skillOpt);
+        const bothIds = await lineIds();
+        const inter = skIds.filter((id) => turnIds.includes(id));
+        check(bothIds.length > 0 && bothIds.length === inter.length && bothIds.every((id) => inter.includes(id)), `${label} 技能＋回合（R${skTurnNo}）篩選＝兩者交集（${bothIds.length} 行）`);
+        await skillSel.selectOption('');
         check((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, `${label} 篩選列沒有水平捲動`);
         await page.getByRole('button', { name: '清除篩選' }).click();
         check((await page.locator('.log .ln').count()) === total, `${label} 清除篩選後恢復`);
